@@ -1,6 +1,7 @@
 import { CheckCircle2 } from "lucide-react";
 import Reveal from "./Reveal";
-import AboutIllustration from "./AboutIllustration";
+import handshakeDealSvg from "undraw-svg/handshake-deal.svg?raw";
+import UndrawIllustration from "./UndrawIllustration";
 
 const points = [
   "شراكات مباشرة مع مصانع وموردين معتمدين لضمان أفضل الأسعار",
@@ -14,7 +15,7 @@ export default function About() {
     <section id="about" className="bg-background py-20 lg:py-28">
       <div className="container-x grid gap-14 lg:grid-cols-2 lg:items-center">
         <Reveal>
-          <AboutIllustration />
+          <UndrawIllustration html={handshakeDealSvg} className="max-w-md" />
         </Reveal>
 
         <Reveal delay={0.1}>

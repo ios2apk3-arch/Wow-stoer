@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowLeft, BadgeCheck, ShieldCheck, Truck } from "lucide-react";
-import HeroIllustration from "./HeroIllustration";
+import deliveryTruckSvg from "undraw-svg/delivery-truck.svg?raw";
+import UndrawIllustration from "./UndrawIllustration";
 
 const badges = [
   { icon: ShieldCheck, label: "جودة مضمونة 100%" },
@@ -68,7 +69,11 @@ export default function Hero() {
           transition={{ duration: 0.8, ease: "easeOut", delay: 0.15 }}
           className="flex justify-center lg:justify-start"
         >
-          <HeroIllustration />
+          <UndrawIllustration
+            html={deliveryTruckSvg}
+            color="text-accent-light"
+            className="max-w-xl drop-shadow-2xl"
+          />
         </motion.div>
       </div>
     </section>

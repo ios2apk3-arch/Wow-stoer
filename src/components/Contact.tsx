@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Mail, MapPin, MessageCircle, Phone, Send } from "lucide-react";
 import Reveal from "./Reveal";
+import packageArrivedSvg from "undraw-svg/package-arrived.svg?raw";
+import UndrawIllustration from "./UndrawIllustration";
 
 const info = [
   { icon: Phone, label: "اتصل بنا", value: "966 50 000 0000+", href: "tel:+966500000000" },
@@ -16,6 +18,7 @@ export default function Contact() {
     <section id="contact" className="bg-background py-20 lg:py-28">
       <div className="container-x grid gap-12 lg:grid-cols-5">
         <Reveal className="lg:col-span-2">
+          <UndrawIllustration html={packageArrivedSvg} className="mb-6 max-w-[220px]" />
           <span className="text-sm font-bold text-accent">تواصل معنا</span>
           <h2 className="mt-3 text-balance text-3xl font-extrabold text-primary sm:text-4xl">
             جاهزون لتوريد احتياجاتك بالجملة
