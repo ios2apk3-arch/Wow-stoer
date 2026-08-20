@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowLeft, BadgeCheck, ShieldCheck, Truck } from "lucide-react";
+import { ArrowLeft, BadgeCheck, Clock3, ShieldCheck, TrendingUp, Truck } from "lucide-react";
 import deliveryTruckSvg from "undraw-svg/delivery-truck.svg?raw";
 import UndrawIllustration from "./UndrawIllustration";
 
@@ -67,13 +67,47 @@ export default function Hero() {
           initial={{ opacity: 0, scale: 0.94 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.8, ease: "easeOut", delay: 0.15 }}
-          className="flex justify-center lg:justify-start"
+          className="relative flex justify-center lg:justify-start"
         >
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center lg:justify-start">
+            <div className="h-[26rem] w-[26rem] rounded-full bg-gradient-to-br from-accent/40 via-accent-light/25 to-transparent blur-3xl" />
+          </div>
+
           <UndrawIllustration
             html={deliveryTruckSvg}
             color="text-accent-light"
-            className="max-w-xl drop-shadow-2xl"
+            className="relative max-w-xl drop-shadow-2xl"
           />
+
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.7 }}
+            className="absolute -top-2 start-2 flex items-center gap-3 rounded-2xl bg-white/95 px-4 py-3 shadow-xl backdrop-blur sm:start-8"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600">
+              <Clock3 className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground">توصيل خلال</div>
+              <div className="text-sm font-extrabold text-primary">24 ساعة</div>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.9 }}
+            className="absolute -bottom-4 end-2 flex items-center gap-3 rounded-2xl bg-white/95 px-4 py-3 shadow-xl backdrop-blur sm:end-8"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10 text-accent">
+              <TrendingUp className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground">عملاء راضون</div>
+              <div className="text-sm font-extrabold text-primary">+850 عميل</div>
+            </div>
+          </motion.div>
         </motion.div>
       </div>
     </section>

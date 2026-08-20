@@ -7,18 +7,21 @@ const testimonials = [
     role: "صاحب سوبر ماركت — جدة",
     quote:
       "منذ ما تعاملنا مع واو، صار توفير البضاعة أسهل بكثير. أسعار ممتازة والتوصيل دايم في وقته.",
+    gradient: "from-accent to-accent-light",
   },
   {
     name: "م. سارة العتيبي",
     role: "مديرة مشتريات مطعم — الرياض",
     quote:
       "فريق واو متعاون جدًا ويفهم احتياجات المطعم. جودة المنتجات ثابتة ولا تختلف من طلبية لأخرى.",
+    gradient: "from-primary to-secondary",
   },
   {
     name: "أبو فهد",
     role: "صاحب محل مواد غذائية — الدمام",
     quote:
       "تنوع كبير بالمنتجات في مكان واحد، وفرت علي وقت وجهد التعامل مع أكثر من مورد.",
+    gradient: "from-accent-light to-accent",
   },
 ];
 
@@ -44,9 +47,16 @@ export default function Testimonials() {
                   ))}
                 </div>
                 <p className="mt-4 flex-1 leading-relaxed text-secondary">{t.quote}</p>
-                <div className="mt-6 border-t border-border pt-4">
-                  <div className="text-sm font-bold text-primary">{t.name}</div>
-                  <div className="text-xs text-muted-foreground">{t.role}</div>
+                <div className="mt-6 flex items-center gap-3 border-t border-border pt-4">
+                  <div
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${t.gradient} text-sm font-extrabold text-white`}
+                  >
+                    {t.name.trim().charAt(0)}
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-primary">{t.name}</div>
+                    <div className="text-xs text-muted-foreground">{t.role}</div>
+                  </div>
                 </div>
               </div>
             </Reveal>
