@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Link, useRouter } from "./router";
 import { useDatabase } from "./usePlatform";
+import { useSession } from "../platform/remote/useApi";
 import { useI18n } from "../i18n";
 import { auth, messaging, notifications } from "../platform/api";
 import { Badge, Button, cx } from "../ui";
@@ -121,6 +122,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const { d, t, locale, toggleLocale } = useI18n();
   const { path, navigate } = useRouter();
   const db = useDatabase();
+  // Re-renders the chrome whenever the session changes.
+  useSession();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const user = auth.currentUser();
@@ -220,8 +223,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <button
                     type="button"
                     onClick={() => {
-                      auth.logout();
-                      navigate("/");
+                      void auth.logout().then(() => navigate("/"));
                     }}
                     className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-semibold text-danger hover:bg-danger-soft"
                   >

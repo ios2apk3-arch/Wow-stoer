@@ -1,8 +1,9 @@
-import { Suspense, lazy, type ReactElement } from "react";
+import { Suspense, lazy, useEffect, useState, type ReactElement } from "react";
 import { I18nProvider } from "./i18n";
 import { RouterProvider, matchPath, useRouter } from "./app/router";
 import { Shell } from "./app/Shell";
 import { ToastProvider } from "./ui";
+import { auth } from "./platform/api";
 
 import Home from "./pages/Home";
 import SearchPage from "./pages/Search";
@@ -99,13 +100,29 @@ function Routes() {
 }
 
 export default function App() {
+  // A stored token is only trustworthy once the server confirms it, so the
+  // first paint waits on that check rather than flashing a signed-in header.
+  const [restoring, setRestoring] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    auth.restore().finally(() => {
+      if (active) setRestoring(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <I18nProvider>
       <ToastProvider>
-        <RouterProvider>
-          <Routes />
-        </RouterProvider>
+        <RouterProvider>{restoring ? <BootSplash /> : <Routes />}</RouterProvider>
       </ToastProvider>
     </I18nProvider>
   );
+}
+
+function BootSplash() {
+  return <div className="min-h-screen bg-background" aria-busy="true" />;
 }

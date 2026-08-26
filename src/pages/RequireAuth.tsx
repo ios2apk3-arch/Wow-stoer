@@ -3,12 +3,14 @@ import type { ReactNode } from "react";
 import { Link } from "../app/router";
 import { useI18n } from "../i18n";
 import { auth } from "../platform/api";
+import { useSession } from "../platform/remote/useApi";
 import { Button, EmptyState } from "../ui";
 import type { Role } from "../platform/types";
 
 /** Route guard: signs the visitor in, or explains why the page is closed. */
 export default function RequireAuth({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const { d, t } = useI18n();
+  useSession();
   const user = auth.currentUser();
 
   if (!user) {

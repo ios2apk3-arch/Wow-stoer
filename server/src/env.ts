@@ -15,8 +15,14 @@ const schema = z.object({
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
 
-  /** Comma-separated list of allowed browser origins. */
-  CORS_ORIGINS: z.string().default("http://localhost:5173,http://localhost:4173"),
+  /**
+   * Comma-separated list of allowed browser origins. Both localhost and
+   * 127.0.0.1 are allowed by default: they are distinct origins to a browser,
+   * and dev servers are reached by either.
+   */
+  CORS_ORIGINS: z
+    .string()
+    .default("http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,http://127.0.0.1:4173"),
 
   /** Guards the one-shot seed endpoint; unset disables it entirely. */
   SEED_TOKEN: z.string().optional(),

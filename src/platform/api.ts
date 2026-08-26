@@ -1,4 +1,6 @@
 import { nowIso, store, uid } from "./store";
+import { api as remoteApi } from "./remote/endpoints";
+import { getSession } from "./remote/http";
 import { estimateShipping, round2, unitPrice, VAT_RATE } from "./pricing";
 import { payments, shipping } from "./adapters";
 import type {
@@ -22,96 +24,67 @@ const db = () => store.getState();
 
 /* ------------------------------------------------------------------ auth */
 
+/**
+ * Authentication now comes from the API, not local storage.
+ *
+ * The accessors stay synchronous by reading the cached session that
+ * `remote/http.ts` keeps in memory, so every existing call site continues to
+ * work unchanged while the identity behind it is real.
+ */
 export const auth = {
   currentUser(): User | null {
-    const { session, users } = db();
-    return users.find((u) => u.id === session.userId) ?? null;
+    const session = getSession();
+    if (!session) return null;
+    const u = session.user;
+    return {
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      role: u.role,
+      companyId: u.companyId,
+      avatarColor: u.avatarColor,
+      createdAt: "",
+    };
   },
 
   currentCompany(): Company | null {
-    const user = auth.currentUser();
-    if (!user?.companyId) return null;
-    return db().companies.find((c) => c.id === user.companyId) ?? null;
+    const c = getSession()?.company;
+    if (!c) return null;
+    return {
+      id: c.id,
+      name: { ar: c.nameAr, en: c.nameEn },
+      legalName: c.nameEn,
+      taxId: c.taxId ?? "",
+      logo: c.logo ?? "",
+      description: { ar: c.descriptionAr ?? "", en: c.descriptionEn ?? "" },
+      countryCode: c.countryCode,
+      city: c.city,
+      website: c.website ?? undefined,
+      phone: c.phone ?? "",
+      email: c.email ?? "",
+      verification: c.verification,
+      memberSince: c.memberSince,
+      addresses: [],
+    };
   },
 
-  /** Demo sign-in: any known email is accepted, password is not checked. */
-  login(email: string): User | null {
-    const user = db().users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-    if (!user) return null;
-    store.update((d) => {
-      d.session.userId = user.id;
-      d.audit.push({ id: uid("aud"), actorId: user.id, action: "auth.login", target: user.email, at: nowIso() });
-    });
-    return user;
+  /** Restore a stored session on boot and confirm it is still valid. */
+  async restore(): Promise<User | null> {
+    if (!getSession()) return null;
+    await remoteApi.auth.hydrateCompany();
+    return auth.currentUser();
   },
 
-  loginAs(userId: string) {
-    store.update((d) => {
-      d.session.userId = userId;
-    });
-  },
+  login: (email: string, password: string) => remoteApi.auth.login(email, password),
 
-  logout() {
-    store.update((d) => {
-      d.session.userId = null;
-    });
-  },
+  register: (input: {
+    name: string; email: string; phone: string; password: string;
+    role: "buyer" | "supplier"; companyName: string; countryCode: string; city: string;
+  }) => remoteApi.auth.register(input),
 
-  register(input: {
-    name: string;
-    email: string;
-    phone: string;
-    role: Role;
-    companyName: string;
-    countryCode: string;
-    city: string;
-  }): User {
-    const companyId = uid("co");
-    const userId = uid("u");
-    store.update((d) => {
-      d.companies.push({
-        id: companyId,
-        name: { ar: input.companyName, en: input.companyName },
-        legalName: input.companyName,
-        taxId: "",
-        logo: input.role === "supplier" ? "🏭" : "🏪",
-        description: { ar: "", en: "" },
-        countryCode: input.countryCode,
-        city: input.city,
-        phone: input.phone,
-        email: input.email,
-        verification: "pending",
-        memberSince: nowIso(),
-        addresses: [],
-      });
-      if (input.role === "supplier") {
-        d.suppliers.push({
-          id: companyId,
-          companyId,
-          categories: [],
-          rating: 0,
-          reviewCount: 0,
-          responseHours: 24,
-          onTimeRate: 0,
-          fulfilledOrders: 0,
-          yearsActive: 0,
-          badges: [],
-        });
-      }
-      d.users.push({
-        id: userId,
-        name: input.name,
-        email: input.email,
-        phone: input.phone,
-        role: input.role,
-        companyId,
-        avatarColor: "#0369a1",
-        createdAt: nowIso(),
-      });
-      d.session.userId = userId;
-      d.audit.push({ id: uid("aud"), actorId: userId, action: "auth.register", target: input.email, at: nowIso() });
-    });
-    return db().users.find((u) => u.id === userId)!;
+  async logout() {
+    await remoteApi.auth.logout(getSession()?.refreshToken);
   },
 };
 

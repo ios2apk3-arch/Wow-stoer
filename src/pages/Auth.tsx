@@ -6,7 +6,13 @@ import { useI18n } from "../i18n";
 import { auth } from "../platform/api";
 import { countries } from "../platform/data/catalog";
 import { Badge, Button, Card, Field, Input, Select, cx, useToast } from "../ui";
-import type { Role } from "../platform/types";
+import { ApiError } from "../platform/remote/http";
+
+/** Every seeded demo account shares this password. */
+const DEMO_PASSWORD = "WawDemo!2026";
+
+const describeError = (err: unknown, fallback: string) =>
+  err instanceof ApiError && err.message ? err.message : fallback;
 
 function AuthShell({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   const { d, t } = useI18n();
@@ -46,7 +52,9 @@ export function LoginPage() {
   const toast = useToast();
   const db = useDatabase();
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState(DEMO_PASSWORD);
   const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
 
   const demoUsers = [
     db.users.find((u) => u.id === "u-buy-1"),
@@ -54,14 +62,19 @@ export function LoginPage() {
     db.users.find((u) => u.id === "u-admin"),
   ].filter((u): u is NonNullable<typeof u> => u != null);
 
-  const signIn = (value: string) => {
-    const user = auth.login(value);
-    if (!user) {
-      setError(t(d.auth.invalidEmail));
-      return;
+  const signIn = async (value: string, secret: string) => {
+    setPending(true);
+    setError("");
+    try {
+      const session = await auth.login(value, secret);
+      toast.push(`${t(d.auth.signedInAs)} ${session.user.name}`);
+      const role = session.user.role;
+      navigate(role === "admin" ? "/admin" : role === "supplier" ? "/supplier" : "/dashboard");
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 401 ? t(d.auth.invalidEmail) : describeError(err, t(d.auth.invalidEmail)));
+    } finally {
+      setPending(false);
     }
-    toast.push(`${t(d.auth.signedInAs)} ${user.name}`);
-    navigate(user.role === "admin" ? "/admin" : user.role === "supplier" ? "/supplier" : "/dashboard");
   };
 
   return (
@@ -70,16 +83,24 @@ export function LoginPage() {
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          signIn(email);
+          void signIn(email, password);
         }}
       >
         <Field label={t(d.auth.email)} error={error} required>
           <Input type="email" value={email} onChange={(e) => { setEmail(e.target.value); setError(""); }} required placeholder="buy-1@waw.example.com" />
         </Field>
-        <Field label={t(d.auth.password)}>
-          <Input type="password" placeholder="••••••••" />
+        <Field label={t(d.auth.password)} required>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            required
+          />
         </Field>
-        <Button type="submit" fullWidth size="lg">{t(d.action.signIn)}</Button>
+        <Button type="submit" fullWidth size="lg" disabled={pending}>
+          {pending ? t(d.common.loading) : t(d.action.signIn)}
+        </Button>
       </form>
 
       <div className="mt-6 border-t border-border pt-5">
@@ -90,7 +111,7 @@ export function LoginPage() {
             <button
               key={u.id}
               type="button"
-              onClick={() => signIn(u.email)}
+              onClick={() => void signIn(u.email, DEMO_PASSWORD)}
               className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-border p-3 text-start transition-colors hover:border-accent hover:bg-accent-soft/40"
             >
               <span
@@ -127,18 +148,29 @@ export function RegisterPage() {
     name: "",
     email: "",
     phone: "",
-    role: "buyer" as Role,
+    password: "",
+    role: "buyer" as "buyer" | "supplier",
     companyName: "",
     countryCode: "SA",
     city: "",
   });
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
 
   const cities = countries.find((c) => c.code === form.countryCode)?.cities ?? [];
 
-  const submit = () => {
-    const user = auth.register({ ...form, city: form.city || cities[0].ar });
-    toast.push(`${t(d.auth.signedInAs)} ${user.name}`);
-    navigate(user.role === "supplier" ? "/supplier" : "/dashboard");
+  const submit = async () => {
+    setPending(true);
+    setError("");
+    try {
+      const session = await auth.register({ ...form, city: form.city || cities[0].ar });
+      toast.push(`${t(d.auth.signedInAs)} ${session.user.name}`);
+      navigate(session.user.role === "supplier" ? "/supplier" : "/dashboard");
+    } catch (err) {
+      setError(describeError(err, t(d.auth.registerTitle)));
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -147,7 +179,7 @@ export function RegisterPage() {
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <Field label={t(d.auth.accountType)} required>
@@ -204,11 +236,25 @@ export function RegisterPage() {
           </Field>
         </div>
 
-        <Field label={t(d.auth.password)} required>
-          <Input type="password" placeholder="••••••••" required />
+        <Field
+          label={t(d.auth.password)}
+          hint={t({ ar: "10 أحرف على الأقل", en: "At least 10 characters" })}
+          error={error || undefined}
+          required
+        >
+          <Input
+            type="password"
+            value={form.password}
+            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+            minLength={10}
+            placeholder="••••••••"
+            required
+          />
         </Field>
 
-        <Button type="submit" fullWidth size="lg">{t(d.action.register)}</Button>
+        <Button type="submit" fullWidth size="lg" disabled={pending}>
+          {pending ? t(d.common.loading) : t(d.action.register)}
+        </Button>
       </form>
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
