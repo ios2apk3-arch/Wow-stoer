@@ -1,12 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, catalog, rfq } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { parse } from "../platform/ai/nlu";
-import { matchSuppliers } from "../platform/ai/assistant";
-import { countries, mainCategories } from "../platform/data/catalog";
+import { categories as allCategories, countries, mainCategories } from "../platform/data/catalog";
 import { Badge, Button, Card, Checkbox, Field, Input, Select, Textarea, useToast } from "../ui";
 import RequireAuth from "./RequireAuth";
 import type { Unit } from "../platform/types";
@@ -19,21 +19,40 @@ function RfqNewInner() {
   const { d, t, n, locale } = useI18n();
   const { query, navigate } = useRouter();
   const toast = useToast();
-  useDatabase();
 
   const company = auth.currentCompany();
-  const prefillProduct = query.get("product") ? catalog.product(query.get("product")!) : null;
+  const productId = query.get("product");
+  const productQuery = useApiQuery(
+    (signal) => api.catalog.product(productId!, signal),
+    [productId],
+    { enabled: Boolean(productId) },
+  );
+  const prefillProduct = productQuery.data?.product ?? null;
   const aiQuery = query.get("ai") ?? "";
   const parsed = useMemo(() => (aiQuery ? parse(aiQuery) : null), [aiQuery]);
+  const [submitting, setSubmitting] = useState(false);
+  const [failure, setFailure] = useState("");
 
-  const [title, setTitle] = useState(
-    prefillProduct ? `${locale === "ar" ? "توريد" : "Supply of"} ${prefillProduct.name[locale]}` : parsed?.keywords.join(" ") ?? "",
-  );
-  const [categoryId, setCategoryId] = useState(prefillProduct?.categoryId ?? mainCategories[0].id);
-  const [qty, setQty] = useState(Number(query.get("qty")) || parsed?.qty || prefillProduct?.moq || 100);
-  const [unit, setUnit] = useState<Unit>(prefillProduct?.unit ?? parsed?.unit ?? "carton");
+  const [title, setTitle] = useState(parsed?.keywords.join(" ") ?? "");
+  const [categoryId, setCategoryId] = useState(mainCategories[0].id);
+  const [qty, setQty] = useState(Number(query.get("qty")) || parsed?.qty || 100);
+  const [unit, setUnit] = useState<Unit>(parsed?.unit ?? "carton");
   const [targetPrice, setTargetPrice] = useState<number | "">(parsed?.budget ?? "");
-  const [specs, setSpecs] = useState(prefillProduct?.specs.map((s) => `${s.label[locale]}: ${s.value[locale]}`).join("\n") ?? "");
+  const [specs, setSpecs] = useState("");
+  const [prefilled, setPrefilled] = useState(false);
+
+  // The product arrives asynchronously; seed the form once it does, without
+  // overwriting anything the user has already typed.
+  useEffect(() => {
+    if (!prefillProduct || prefilled) return;
+    setTitle(`${locale === "ar" ? "توريد" : "Supply of"} ${prefillProduct.name[locale]}`);
+    setCategoryId(prefillProduct.categoryId);
+    setUnit(prefillProduct.unit);
+    setQty((q) => (Number(query.get("qty")) || q) || prefillProduct.moq);
+    setSpecs(prefillProduct.specs.map((sp) => `${sp.label[locale]}: ${sp.value[locale]}`).join("\n"));
+    setInvited((prev) => (prev.length ? prev : [prefillProduct.supplierId]));
+    setPrefilled(true);
+  }, [prefillProduct, prefilled, locale, query]);
   const [neededBy, setNeededBy] = useState(
     new Date(Date.now() + (parsed?.withinDays ?? 14) * 864e5).toISOString().slice(0, 10),
   );
@@ -43,39 +62,50 @@ function RfqNewInner() {
   const [shippingTerms, setShippingTerms] = useState<string>("DDP");
   const [notes, setNotes] = useState("");
 
-  // Suggest suppliers from the category, ranked by the same engine the assistant uses.
-  const suggested = useMemo(() => {
-    const fromAi = parsed ? matchSuppliers(parsed, 6).map((m) => m.supplierId) : [];
-    const fromCategory = catalog.suppliers().filter((s) => s.categories.includes(categoryId)).map((s) => s.id);
-    return [...new Set([...fromAi, ...fromCategory])].slice(0, 8);
-  }, [parsed, categoryId]);
+  // Suppliers that actually carry this category, straight from the server.
+  const suggestedQuery = useApiQuery(
+    (signal) => api.catalog.suppliers({ category: categoryId, perPage: 8 }, signal),
+    [categoryId],
+  );
+  const suggested = suggestedQuery.data?.items ?? [];
 
   const [invited, setInvited] = useState<string[]>(() =>
-    prefillProduct ? [prefillProduct.supplierId] : query.get("supplier") ? [query.get("supplier")!] : [],
+    query.get("supplier") ? [query.get("supplier")!] : [],
   );
 
-  const submit = () => {
-    if (!company) return;
-    const created = rfq.create({
-      buyerCompanyId: company.id,
-      title: { ar: title, en: title },
-      categoryId,
-      productId: prefillProduct?.id,
-      qty,
-      unit,
-      targetPrice: targetPrice === "" ? undefined : Number(targetPrice),
-      currency: "SAR",
-      specs,
-      neededBy: new Date(neededBy).toISOString(),
-      deliveryCity: city,
-      deliveryCountry: country,
-      paymentTerms,
-      shippingTerms,
-      notes,
-      invitedSupplierIds: invited.length ? invited : suggested.slice(0, 3),
-    });
-    toast.push(t(d.rfq.new));
-    navigate(`/rfq/${created.id}`);
+  const submit = async () => {
+    const supplierIds = invited.length ? invited : suggested.slice(0, 3).map((s) => s.id);
+    if (!supplierIds.length) {
+      setFailure(t(d.rfq.inviteSuppliers));
+      return;
+    }
+    setSubmitting(true);
+    setFailure("");
+    try {
+      const created = await api.rfq.create({
+        title,
+        categoryId,
+        productId: prefillProduct?.id ?? null,
+        qty,
+        unit,
+        targetPrice: targetPrice === "" ? null : Number(targetPrice),
+        specs,
+        neededBy,
+        deliveryCity: city,
+        deliveryCountry: country,
+        paymentTerms,
+        shippingTerms,
+        notes,
+        supplierIds,
+      });
+      toast.push(t(d.rfq.new));
+      navigate(`/rfq/${created.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t(d.rfq.new);
+      setFailure(message);
+      toast.push(message, "danger");
+      setSubmitting(false);
+    }
   };
 
   const cities = countries.find((c) => c.code === country)?.cities ?? [];
@@ -103,7 +133,7 @@ function RfqNewInner() {
         className="mt-6 grid gap-6 lg:grid-cols-[1fr_20rem]"
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <div className="space-y-4">
@@ -115,7 +145,7 @@ function RfqNewInner() {
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label={t(d.nav.categories)} required>
                 <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                  {catalog.categories().map((c) => (
+                  {allCategories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.parentId ? "— " : ""}{t(c.name)}
                     </option>
@@ -208,34 +238,36 @@ function RfqNewInner() {
             </p>
 
             <div className="mt-4 max-h-80 space-y-1 overflow-y-auto pe-1">
-              {suggested.map((sid) => {
-                const co = catalog.supplierCompany(sid);
-                const sup = catalog.supplier(sid);
-                if (!co || !sup) return null;
-                return (
-                  <Checkbox
-                    key={sid}
-                    checked={invited.includes(sid)}
-                    onChange={() =>
-                      setInvited((prev) => (prev.includes(sid) ? prev.filter((s) => s !== sid) : [...prev, sid]))
-                    }
-                    label={
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span>{co.logo}</span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-xs font-bold">{t(co.name)}</span>
-                          <span className="num block text-[10px] text-muted-foreground">★ {sup.rating.toFixed(1)} · {co.city}</span>
+              {suggestedQuery.loading && <p className="py-3 text-xs text-muted-foreground">{t(d.common.loading)}</p>}
+              {suggested.map((sup) => (
+                <Checkbox
+                  key={sup.id}
+                  checked={invited.includes(sup.id)}
+                  onChange={() =>
+                    setInvited((prev) => (prev.includes(sup.id) ? prev.filter((s) => s !== sup.id) : [...prev, sup.id]))
+                  }
+                  label={
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span>{sup.logo}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-bold">{t(sup.name)}</span>
+                        <span className="num block text-[10px] text-muted-foreground">
+                          ★ {sup.rating.toFixed(1)} · {sup.city}
                         </span>
                       </span>
-                    }
-                  />
-                );
-              })}
+                    </span>
+                  }
+                />
+              ))}
+              {!suggestedQuery.loading && !suggested.length && (
+                <p className="py-3 text-xs text-muted-foreground">{t(d.search.noResults)}</p>
+              )}
             </div>
 
-            <Button type="submit" fullWidth size="lg" className="mt-5">
-              {t(d.action.submit)}
+            <Button type="submit" fullWidth size="lg" className="mt-5" disabled={submitting}>
+              {submitting ? t(d.common.loading) : t(d.action.submit)}
             </Button>
+            {failure && <p className="mt-2 text-center text-[11px] font-semibold text-danger">{failure}</p>}
           </Card>
         </aside>
       </form>

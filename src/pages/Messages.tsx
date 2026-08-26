@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageSquare, Send, Sparkles } from "lucide-react";
 import { useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, catalog, messaging } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { respond } from "../platform/ai/assistant";
 import { Button, Card, EmptyState, Input, cx } from "../ui";
 import RequireAuth from "./RequireAuth";
@@ -11,38 +12,53 @@ import RequireAuth from "./RequireAuth";
 function MessagesInner() {
   const { d, t, date } = useI18n();
   const { query, setQuery } = useRouter();
-  useDatabase();
 
   const user = auth.currentUser();
-  const company = auth.currentCompany();
   const side: "buyer" | "supplier" = user?.role === "supplier" ? "supplier" : "buyer";
 
-  const threads =
-    side === "supplier" && company
-      ? messaging.threadsForSupplier(company.id.replace("co-", ""))
-      : company
-        ? messaging.threadsForBuyer(company.id)
-        : [];
+  const threadsQuery = useApiQuery((signal) => api.messaging.threads(signal), []);
+  const threads = threadsQuery.data?.threads ?? [];
 
   const activeId = query.get("thread") ?? threads[0]?.id ?? "";
-  const active = messaging.thread(activeId);
-  const messages = activeId ? messaging.messages(activeId) : [];
+  const messagesQuery = useApiQuery(
+    (signal) => api.messaging.messages(activeId, signal),
+    [activeId],
+    { enabled: Boolean(activeId) },
+  );
+  const active = messagesQuery.data?.thread ?? null;
+  const messages = messagesQuery.data?.messages ?? [];
+
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
+  // Clearing the unread badge is best-effort; a failure must not break the view.
   useEffect(() => {
-    if (activeId) messaging.markRead(activeId);
+    if (!activeId) return;
+    api.messaging.markRead(activeId).then(() => threadsQuery.refetch()).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, activeId]);
 
-  const send = () => {
+  const send = async () => {
     const body = draft.trim();
-    if (!body || !activeId || !user) return;
-    messaging.send(activeId, user.id, user.name, side, body);
+    if (!body || !activeId || sending) return;
+    setSending(true);
+    const previous = draft;
     setDraft("");
+    try {
+      await api.messaging.send(activeId, body);
+      messagesQuery.refetch();
+      threadsQuery.refetch();
+    } catch {
+      // Put the text back rather than silently losing what was typed.
+      setDraft(previous);
+    } finally {
+      setSending(false);
+    }
   };
 
   /** Draft a reply with the assistant, so the user can edit before sending. */
@@ -54,10 +70,22 @@ function MessagesInner() {
     setDraft(text);
   };
 
+  if (threadsQuery.loading && !threads.length) {
+    return (
+      <div className="container-x py-8">
+        <div className="h-96 animate-pulse rounded-2xl border border-border bg-muted/50" />
+      </div>
+    );
+  }
+
   if (!threads.length) {
     return (
       <div className="container-x py-16">
-        <EmptyState icon={<MessageSquare className="h-6 w-6" />} title={t(d.messages.noThreads)} />
+        <EmptyState
+          icon={<MessageSquare className="h-6 w-6" />}
+          title={t(d.messages.noThreads)}
+          hint={t({ ar: "ابدأ محادثة من صفحة أي مورد.", en: "Start one from any supplier's page." })}
+        />
       </div>
     );
   }
@@ -69,8 +97,7 @@ function MessagesInner() {
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <Card className="max-h-[70vh] overflow-y-auto p-2">
           {threads.map((thread) => {
-            const other = side === "buyer" ? catalog.supplierCompany(thread.supplierId) : null;
-            const unread = messaging.messages(thread.id).filter((m) => !m.read && m.side !== side).length;
+            const unread = thread.unreadCount;
             return (
               <button
                 key={thread.id}
@@ -82,7 +109,7 @@ function MessagesInner() {
                 )}
               >
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-xl">
-                  {other?.logo ?? "💬"}
+                  💬
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-extrabold text-foreground">{t(thread.subject)}</span>
@@ -113,7 +140,7 @@ function MessagesInner() {
                       <div
                         className={cx(
                           "max-w-[80%] rounded-2xl px-4 py-3",
-                          m.side === "ai"
+                          m.kind === "ai"
                             ? "border border-accent/30 bg-accent-soft"
                             : mine
                               ? "bg-accent text-accent-foreground"
@@ -150,12 +177,12 @@ function MessagesInner() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
-                        send();
+                        void send();
                       }
                     }}
                     placeholder={t(d.messages.placeholder)}
                   />
-                  <Button onClick={send} disabled={!draft.trim()} className="shrink-0">
+                  <Button onClick={() => void send()} disabled={!draft.trim() || sending} className="shrink-0">
                     <Send className="h-4 w-4" />
                   </Button>
                 </div>

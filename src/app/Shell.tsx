@@ -4,10 +4,11 @@ import {
   ShoppingCart, Sparkles, User as UserIcon, X, Globe,
 } from "lucide-react";
 import { Link, useRouter } from "./router";
-import { useDatabase } from "./usePlatform";
 import { useSession } from "../platform/remote/useApi";
 import { useI18n } from "../i18n";
-import { auth, messaging, notifications } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { Badge, Button, cx } from "../ui";
 
 function WawMark({ className }: { className?: string }) {
@@ -121,15 +122,26 @@ const supplierLinks = [
 export function Shell({ children }: { children: ReactNode }) {
   const { d, t, locale, toggleLocale } = useI18n();
   const { path, navigate } = useRouter();
-  const db = useDatabase();
   // Re-renders the chrome whenever the session changes.
   useSession();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const user = auth.currentUser();
-  const cartCount = db.cart.length;
-  const notifCount = user ? notifications.unreadCount(user.id) : 0;
-  const msgCount = user ? messaging.unreadCount(user.id) : 0;
+
+  // Badge counts come from the server, and only when someone is signed in.
+  // Only buyers have a cart; asking for one as a supplier or admin is a 403.
+  const isBuyer = user?.role === "buyer";
+  const cartQuery = useApiQuery((signal) => api.cart.get(signal), [user?.id], { enabled: isBuyer });
+  const notifQuery = useApiQuery(
+    (signal) => api.notifications.list({ perPage: 1 }, signal),
+    [user?.id],
+    { enabled: Boolean(user) },
+  );
+  const threadsQuery = useApiQuery((signal) => api.messaging.threads(signal), [user?.id], { enabled: Boolean(user) });
+
+  const cartCount = cartQuery.data?.lines.length ?? 0;
+  const notifCount = notifQuery.data?.unreadCount ?? 0;
+  const msgCount = threadsQuery.data?.threads.reduce((sum, t) => sum + t.unreadCount, 0) ?? 0;
 
   const links = user?.role === "supplier" ? supplierLinks : buyerLinks;
   const isActive = (href: string) => path === href || path.startsWith(`${href}/`);
@@ -187,10 +199,12 @@ export function Shell({ children }: { children: ReactNode }) {
               </>
             )}
 
-            <Link to="/cart" className="relative rounded-xl p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t(d.nav.cart)}>
-              <ShoppingCart className="h-5 w-5" />
-              {cartCount > 0 && <span className="num absolute end-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">{cartCount}</span>}
-            </Link>
+            {(!user || isBuyer) && (
+              <Link to="/cart" className="relative rounded-xl p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t(d.nav.cart)}>
+                <ShoppingCart className="h-5 w-5" />
+                {cartCount > 0 && <span className="num absolute end-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">{cartCount}</span>}
+              </Link>
+            )}
 
             {user ? (
               <Dropdown

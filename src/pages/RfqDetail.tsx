@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Award, Check, Handshake } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, catalog, negotiation, rfq } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { RfqStatusBadge } from "../components/StatusBadge";
 import { Badge, Button, Card, Field, Input, Modal, Rating, Select, Textarea, cx, useToast } from "../ui";
 import NotFound from "./NotFound";
@@ -16,14 +17,17 @@ function RfqDetailInner({ id }: { id: string }) {
   const { d, t, n, money, date } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
-  useDatabase();
 
-  const request = rfq.get(id);
+  const { data: request, loading, error, refetch } = useApiQuery((signal) => api.rfq.get(id, signal), [id]);
+  const suppliersQuery = useApiQuery((signal) => api.catalog.suppliers({ perPage: 50 }, signal), []);
   const user = auth.currentUser();
   const company = auth.currentCompany();
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const supplierId = company?.id.replace("co-", "") ?? "";
+  const supplierId = company?.id ?? "";
+  const supplierName = (sid: string) =>
+    suppliersQuery.data?.items.find((s) => s.id === sid) ?? null;
   const [form, setForm] = useState({
     unitPrice: 0,
     moq: 0,
@@ -35,59 +39,88 @@ function RfqDetailInner({ id }: { id: string }) {
     notes: "",
   });
 
-  if (!request) return <NotFound />;
+  if (loading && !request) {
+    return (
+      <div className="container-x py-8">
+        <div className="h-96 animate-pulse rounded-2xl border border-border bg-muted/50" />
+      </div>
+    );
+  }
+  if (error?.isNotFound || error?.isForbidden || !request) return <NotFound />;
 
-  const quotes = rfq.quotesFor(request.id);
+  const quotes = request.quotes ?? [];
+  const invitedSupplierIds = request.invitedSupplierIds ?? [];
   const isBuyer = company?.id === request.buyerCompanyId;
-  const isInvitedSupplier = user?.role === "supplier" && request.invitedSupplierIds.includes(supplierId);
+  const isInvitedSupplier = user?.role === "supplier" && invitedSupplierIds.includes(supplierId);
   const alreadyQuoted = quotes.some((q) => q.supplierId === supplierId);
   const bestPrice = quotes.length ? Math.min(...quotes.map((q) => q.unitPrice)) : null;
 
-  const submitQuote = () => {
-    rfq.submitQuote({
-      rfqId: request.id,
-      supplierId,
-      unitPrice: form.unitPrice,
-      currency: "SAR",
-      moq: form.moq || request.qty,
-      leadTimeDays: form.leadTimeDays,
-      shippingCost: form.shippingCost,
-      shippingTerms: form.shippingTerms,
-      paymentTerms: form.paymentTerms,
-      validUntil: new Date(Date.now() + form.validDays * 864e5).toISOString(),
-      notes: form.notes,
-    });
-    setQuoteOpen(false);
-    toast.push(t(d.rfq.submitQuote));
+  const run = async (action: () => Promise<unknown>, label: string) => {
+    setBusy(true);
+    try {
+      await action();
+      refetch();
+      toast.push(label);
+      return true;
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : label, "danger");
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const startNegotiation = (quoteId: string) => {
+  const submitQuote = async () => {
+    const ok = await run(
+      () =>
+        api.rfq.submitQuote(request.id, {
+          unitPrice: form.unitPrice,
+          moq: form.moq || request.qty,
+          leadTimeDays: form.leadTimeDays,
+          shippingCost: form.shippingCost,
+          shippingTerms: form.shippingTerms,
+          paymentTerms: form.paymentTerms,
+          validDays: form.validDays,
+          notes: form.notes,
+        }),
+      t(d.rfq.submitQuote),
+    );
+    if (ok) setQuoteOpen(false);
+  };
+
+  const startNegotiation = async (quoteId: string) => {
     const quote = quotes.find((q) => q.id === quoteId);
-    if (!quote || !company) return;
-    const productId = request.productId ?? catalog.search({ categoryId: request.categoryId, supplierId: quote.supplierId })[0]?.id;
+    if (!quote) return;
+
+    // An RFQ may name a product, or only a category; fall back to the
+    // supplier's closest listing in that category.
+    let productId = request.productId ?? null;
+    if (!productId) {
+      const match = await api.catalog.products({ category: request.categoryId, supplier: quote.supplierId, perPage: 1 });
+      productId = match.items[0]?.id ?? null;
+    }
     if (!productId) {
       toast.push(t(d.search.noResults), "warning");
       return;
     }
-    negotiation.start({
-      productId,
-      buyerCompanyId: company.id,
-      supplierId: quote.supplierId,
-      actorName: user?.name ?? "Buyer",
-      rfqId: request.id,
-      quoteId: quote.id,
-      terms: {
-        unitPrice: Math.round(quote.unitPrice * 0.92 * 100) / 100,
-        qty: request.qty,
-        moq: quote.moq,
-        shippingCost: quote.shippingCost,
-        shippingTerms: quote.shippingTerms,
-        paymentTerms: quote.paymentTerms,
-      },
-      message: "",
-    });
-    toast.push(t(d.negotiation.title));
-    navigate("/negotiations");
+
+    const ok = await run(
+      () =>
+        api.negotiations.start({
+          productId: productId!,
+          rfqId: request.id,
+          quoteId: quote.id,
+          unitPrice: Math.round(quote.unitPrice * 0.92 * 100) / 100,
+          qty: request.qty,
+          moq: quote.moq,
+          shippingCost: quote.shippingCost,
+          shippingTerms: quote.shippingTerms,
+          paymentTerms: quote.paymentTerms,
+          message: "",
+        }),
+      t(d.negotiation.title),
+    );
+    if (ok) navigate("/negotiations");
   };
 
   return (
@@ -135,17 +168,18 @@ function RfqDetailInner({ id }: { id: string }) {
                   </thead>
                   <tbody>
                     {[...quotes].sort((a, b) => a.unitPrice - b.unitPrice).map((q) => {
-                      const co = catalog.supplierCompany(q.supplierId);
-                      const sup = catalog.supplier(q.supplierId);
+                      const sup = supplierName(q.supplierId);
                       const isBest = q.unitPrice === bestPrice;
                       const lineTotal = q.unitPrice * request.qty + q.shippingCost;
                       return (
                         <tr key={q.id} className={cx("border-b border-border/60 last:border-0", q.status === "accepted" && "bg-success-soft/50")}>
                           <td className="py-3">
                             <Link to={`/supplier/${q.supplierId}`} className="flex items-center gap-2 hover:text-accent">
-                              <span className="text-lg">{co?.logo}</span>
+                              <span className="text-lg">{sup?.logo ?? "🏢"}</span>
                               <span className="min-w-0">
-                                <span className="block truncate text-xs font-extrabold text-foreground">{co ? t(co.name) : q.supplierId}</span>
+                                <span className="block truncate text-xs font-extrabold text-foreground">
+                                  {sup ? t(sup.name) : q.supplierId}
+                                </span>
                                 {sup && <Rating value={sup.rating} className="mt-0.5" />}
                               </span>
                             </Link>
@@ -164,10 +198,14 @@ function RfqDetailInner({ id }: { id: string }) {
                           <td className="py-3">
                             {isBuyer && request.status !== "awarded" && (
                               <div className="flex gap-1.5">
-                                <Button size="sm" onClick={() => { rfq.acceptQuote(q.id); toast.push(t(d.rfq.acceptQuote)); }}>
+                                <Button
+                                  size="sm"
+                                  disabled={busy}
+                                  onClick={() => void run(() => api.rfq.award(request.id, q.id), t(d.rfq.acceptQuote))}
+                                >
                                   <Check className="h-3.5 w-3.5" />
                                 </Button>
-                                <Button size="sm" variant="outline" onClick={() => startNegotiation(q.id)}>
+                                <Button size="sm" variant="outline" disabled={busy} onClick={() => void startNegotiation(q.id)}>
                                   <Handshake className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
@@ -228,13 +266,13 @@ function RfqDetailInner({ id }: { id: string }) {
           <Card className="p-5">
             <h2 className="text-sm font-extrabold text-foreground">{t(d.rfq.inviteSuppliers)}</h2>
             <ul className="mt-4 space-y-2.5">
-              {request.invitedSupplierIds.map((sid) => {
-                const co = catalog.supplierCompany(sid);
+              {invitedSupplierIds.map((sid) => {
+                const co = supplierName(sid);
                 const responded = quotes.some((q) => q.supplierId === sid);
                 return (
                   <li key={sid}>
                     <Link to={`/supplier/${sid}`} className="flex items-center gap-2.5 hover:opacity-80">
-                      <span className="text-lg">{co?.logo}</span>
+                      <span className="text-lg">{co?.logo ?? "🏢"}</span>
                       <span className="min-w-0 flex-1 truncate text-xs font-bold text-foreground">{co ? t(co.name) : sid}</span>
                       <Badge tone={responded ? "success" : "neutral"}>
                         {responded ? t(d.rfq.statuses.quoted) : t(d.rfq.statuses.open)}
@@ -255,7 +293,9 @@ function RfqDetailInner({ id }: { id: string }) {
         footer={
           <div className="flex gap-2.5">
             <Button variant="outline" onClick={() => setQuoteOpen(false)}>{t(d.action.cancel)}</Button>
-            <Button fullWidth onClick={submitQuote} disabled={form.unitPrice <= 0}>{t(d.action.submit)}</Button>
+            <Button fullWidth onClick={() => void submitQuote()} disabled={form.unitPrice <= 0 || busy}>
+              {t(d.action.submit)}
+            </Button>
           </div>
         }
       >

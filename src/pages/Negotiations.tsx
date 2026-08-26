@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { ArrowRight, Check, Handshake, X } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, catalog, negotiation } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { NegotiationStatusBadge } from "../components/StatusBadge";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, Select, Textarea, cx, useToast } from "../ui";
 import RequireAuth from "./RequireAuth";
-import type { Negotiation, NegotiationTerms } from "../platform/types";
+import type { NegotiationTerms, RemoteNegotiation } from "../platform/remote/endpoints";
 
 const paymentTermOptions = ["prepaid", "net_15", "net_30", "50_50"] as const;
 
@@ -33,46 +34,64 @@ function TermsGrid({ terms, currency }: { terms: NegotiationTerms; currency: str
   );
 }
 
-function NegotiationThread({ item }: { item: Negotiation }) {
+function NegotiationThread({ item, onChanged }: { item: RemoteNegotiation; onChanged: () => void }) {
   const { d, t, n, money, date } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
 
   const user = auth.currentUser();
-  const company = auth.currentCompany();
-  const product = catalog.product(item.productId);
-  const supplierCompany = catalog.supplierCompany(item.supplierId);
+  const productQuery = useApiQuery((signal) => api.catalog.product(item.productId, signal), [item.productId]);
+  const product = productQuery.data?.product ?? null;
 
   const side: "buyer" | "supplier" = user?.role === "supplier" ? "supplier" : "buyer";
   const last = item.rounds[item.rounds.length - 1];
-  const first = item.rounds[0];
-  const savings = first.terms.unitPrice && last.terms.unitPrice
-    ? Math.round(((product?.tiers[0].price ?? last.terms.unitPrice) - last.terms.unitPrice) / (product?.tiers[0].price ?? 1) * 1000) / 10
-    : 0;
+  // Saving is measured against the seller's listed entry price.
+  const listed = product?.entryPrice ?? 0;
+  const savings = listed && last ? Math.round(((listed - last.terms.unitPrice) / listed) * 1000) / 10 : 0;
 
   const [counterOpen, setCounterOpen] = useState(false);
   const [terms, setTerms] = useState<NegotiationTerms>(last.terms);
   const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const myTurn = item.status === "active" && last.by !== side;
 
-  const submitCounter = () => {
-    negotiation.counter(item.id, side, user?.name ?? side, terms, message);
-    setCounterOpen(false);
-    setMessage("");
-    toast.push(t(d.action.counter));
+  const run = async (action: () => Promise<unknown>, label: string) => {
+    setBusy(true);
+    try {
+      await action();
+      onChanged();
+      toast.push(label);
+      return true;
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : label, "danger");
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const resolve = (accept: boolean) => {
-    negotiation.resolve(item.id, side, user?.name ?? side, accept, "");
-    toast.push(t(accept ? d.action.accept : d.action.reject));
+  const submitCounter = async () => {
+    const ok = await run(() => api.negotiations.counter(item.id, { ...terms, message }), t(d.action.counter));
+    if (ok) {
+      setCounterOpen(false);
+      setMessage("");
+    }
   };
+
+  const resolve = (accept: boolean) =>
+    run(() => api.negotiations.decide(item.id, accept ? "accept" : "reject"), t(accept ? d.action.accept : d.action.reject));
 
   const convert = async () => {
-    const order = await negotiation.convertToOrder(item.id);
-    if (order) {
+    setBusy(true);
+    try {
+      const result = await api.negotiations.convert(item.id);
       toast.push(t(d.action.convertToOrder));
-      navigate(`/order/${order.id}`);
+      navigate(`/order/${result.orderId}`);
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : t(d.action.convertToOrder), "danger");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -92,7 +111,7 @@ function NegotiationThread({ item }: { item: Negotiation }) {
               </Link>
             )}
             <Link to={`/supplier/${item.supplierId}`} className="text-[11px] font-semibold text-muted-foreground hover:text-accent">
-              {supplierCompany ? t(supplierCompany.name) : item.supplierId}
+              {product ? t(product.supplier.name) : t(d.nav.suppliers)}
             </Link>
           </div>
         </div>
@@ -143,22 +162,22 @@ function NegotiationThread({ item }: { item: Negotiation }) {
       <div className="mt-5 flex flex-wrap gap-2.5 border-t border-border pt-5">
         {item.status === "active" && (
           <>
-            <Button size="sm" variant="outline" onClick={() => { setTerms(last.terms); setCounterOpen(true); }}>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => { setTerms(last.terms); setCounterOpen(true); }}>
               <Handshake className="h-4 w-4" />
               {t(d.action.counter)}
             </Button>
-            <Button size="sm" variant="success" disabled={!myTurn} onClick={() => resolve(true)}>
+            <Button size="sm" variant="success" disabled={!myTurn || busy} onClick={() => void resolve(true)}>
               <Check className="h-4 w-4" />
               {t(d.action.accept)}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => resolve(false)}>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void resolve(false)}>
               <X className="h-4 w-4" />
               {t(d.action.reject)}
             </Button>
           </>
         )}
         {item.status === "accepted" && (
-          <Button size="sm" onClick={convert}>
+          <Button size="sm" disabled={busy} onClick={() => void convert()}>
             <ArrowRight className="h-4 w-4" />
             {t(d.action.convertToOrder)}
           </Button>
@@ -177,7 +196,7 @@ function NegotiationThread({ item }: { item: Negotiation }) {
         footer={
           <div className="flex gap-2.5">
             <Button variant="outline" onClick={() => setCounterOpen(false)}>{t(d.action.cancel)}</Button>
-            <Button fullWidth onClick={submitCounter}>{t(d.action.submit)}</Button>
+            <Button fullWidth disabled={busy} onClick={() => void submitCounter()}>{t(d.action.submit)}</Button>
           </div>
         }
       >
@@ -221,28 +240,25 @@ function NegotiationThread({ item }: { item: Negotiation }) {
 
 function NegotiationsInner() {
   const { d, t, n } = useI18n();
-  useDatabase();
-
-  const user = auth.currentUser();
-  const company = auth.currentCompany();
-
-  const list =
-    user?.role === "supplier" && company
-      ? negotiation.forSupplier(company.id.replace("co-", ""))
-      : user?.role === "admin"
-        ? negotiation.all()
-        : company
-          ? negotiation.forBuyer(company.id)
-          : [];
+  const { data, loading, refetch } = useApiQuery((signal) => api.negotiations.list({ perPage: 50 }, signal), []);
+  const list = data?.items ?? [];
 
   return (
     <div className="container-x py-8">
       <header className="mb-6">
         <h1 className="text-2xl font-extrabold text-foreground">{t(d.negotiation.title)}</h1>
-        <p className="num mt-1 text-sm text-muted-foreground">{n(list.length)}</p>
+        <p className="num mt-1 text-sm text-muted-foreground">
+          {loading ? t(d.common.loading) : n(data?.total ?? 0)}
+        </p>
       </header>
 
-      {list.length === 0 ? (
+      {loading && !list.length ? (
+        <div className="space-y-4">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="h-64 animate-pulse rounded-2xl border border-border bg-muted/50" />
+          ))}
+        </div>
+      ) : list.length === 0 ? (
         <EmptyState
           icon={<Handshake className="h-6 w-6" />}
           title={t(d.negotiation.noNegotiations)}
@@ -255,7 +271,7 @@ function NegotiationsInner() {
       ) : (
         <div className="space-y-4">
           {list.map((item) => (
-            <NegotiationThread key={item.id} item={item} />
+            <NegotiationThread key={item.id} item={item} onChanged={refetch} />
           ))}
         </div>
       )}

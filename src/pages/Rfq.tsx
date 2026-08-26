@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { FileText, Plus } from "lucide-react";
 import { Link } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, rfq } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { RfqStatusBadge } from "../components/StatusBadge";
 import { Button, Card, EmptyState, Select } from "../ui";
 import RequireAuth from "./RequireAuth";
@@ -13,29 +14,25 @@ const statuses: (RfqStatus | "all")[] = ["all", "open", "quoted", "awarded", "cl
 
 function RfqListInner() {
   const { d, t, n, money, date } = useI18n();
-  useDatabase();
   const [filter, setFilter] = useState<RfqStatus | "all">("all");
-
   const user = auth.currentUser();
-  const company = auth.currentCompany();
 
-  const list =
-    user?.role === "supplier" && company
-      ? rfq.forSupplier(company.id.replace("co-", ""))
-      : user?.role === "admin"
-        ? rfq.all()
-        : company
-          ? rfq.forBuyer(company.id)
-          : [];
-
-  const filtered = filter === "all" ? list : list.filter((r) => r.status === filter);
+  // Scoped server-side: buyers see their own, suppliers only those they were
+  // invited to, admins see everything.
+  const { data, loading } = useApiQuery(
+    (signal) => api.rfq.list({ status: filter === "all" ? undefined : filter, perPage: 50 }, signal),
+    [filter],
+  );
+  const filtered = data?.items ?? [];
 
   return (
     <div className="container-x py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold text-foreground">{t(d.rfq.title)}</h1>
-          <p className="num mt-1 text-sm text-muted-foreground">{n(filtered.length)}</p>
+          <p className="num mt-1 text-sm text-muted-foreground">
+            {loading ? t(d.common.loading) : n(data?.total ?? 0)}
+          </p>
         </div>
         <div className="flex items-center gap-2.5">
           <Select value={filter} onChange={(e) => setFilter(e.target.value as RfqStatus | "all")} className="h-9 w-auto text-xs">
@@ -54,7 +51,13 @@ function RfqListInner() {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {loading && !filtered.length ? (
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-muted/50" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={<FileText className="h-6 w-6" />}
           title={t(d.rfq.noRfqs)}
@@ -69,8 +72,8 @@ function RfqListInner() {
       ) : (
         <div className="space-y-3">
           {filtered.map((r) => {
-            const quotes = rfq.quotesFor(r.id);
-            const best = quotes.length ? Math.min(...quotes.map((q) => q.unitPrice)) : null;
+            const quoteCount = r.quoteCount ?? 0;
+            const best = r.bestQuote ?? null;
             return (
               <Link key={r.id} to={`/rfq/${r.id}`}>
                 <Card className="p-5 transition-all hover:border-border-strong hover:shadow-[var(--shadow-raised)]">
@@ -87,7 +90,7 @@ function RfqListInner() {
                     </div>
                     <div className="text-end">
                       <div className="num text-sm font-extrabold text-foreground">
-                        {quotes.length} {t(d.rfq.quotesReceived)}
+                        {n(quoteCount)} {t(d.rfq.quotesReceived)}
                       </div>
                       {best != null && (
                         <div className="num mt-1 text-[11px] font-semibold text-success">

@@ -115,6 +115,107 @@ export interface ShippingQuote {
   etaDays: number;
 }
 
+
+export interface RemoteQuote {
+  id: string;
+  supplierId: string;
+  unitPrice: number;
+  currency: string;
+  moq: number;
+  leadTimeDays: number;
+  shippingCost: number;
+  shippingTerms: string;
+  paymentTerms: string;
+  validUntil: string;
+  notes: string;
+  status: "submitted" | "revised" | "accepted" | "rejected" | "expired";
+  createdAt: string;
+}
+
+export interface RemoteRfq {
+  id: string;
+  reference: string;
+  buyerCompanyId: string;
+  title: I18nText;
+  categoryId: string;
+  productId: string | null;
+  qty: number;
+  unit: Unit;
+  targetPrice: number | null;
+  currency: string;
+  specs: string;
+  neededBy: string;
+  deliveryCity: string;
+  deliveryCountry: string;
+  paymentTerms: string;
+  shippingTerms: string;
+  notes: string;
+  status: "open" | "quoted" | "awarded" | "closed" | "expired";
+  createdAt: string;
+  expiresAt: string;
+  /** Present on the list endpoint only. */
+  quoteCount?: number;
+  bestQuote?: number | null;
+  /** Present on the detail endpoint only. */
+  invitedSupplierIds?: string[];
+  quotes?: RemoteQuote[];
+}
+
+export interface NegotiationTerms {
+  unitPrice: number;
+  qty: number;
+  moq: number;
+  shippingCost: number;
+  shippingTerms: string;
+  paymentTerms: string;
+}
+
+export interface RemoteNegotiationRound {
+  id: string;
+  by: "buyer" | "supplier";
+  actorName: string;
+  kind: "offer" | "counter" | "accept" | "reject";
+  terms: NegotiationTerms;
+  message: string;
+  at: string;
+}
+
+export interface RemoteNegotiation {
+  id: string;
+  reference: string;
+  productId: string;
+  buyerCompanyId: string;
+  supplierId: string;
+  rfqId: string | null;
+  quoteId: string | null;
+  currency: string;
+  status: "active" | "accepted" | "rejected" | "converted";
+  orderId: string | null;
+  createdAt: string;
+  rounds: RemoteNegotiationRound[];
+}
+
+export interface RemoteThread {
+  id: string;
+  buyerCompanyId: string;
+  supplierId: string;
+  subject: I18nText;
+  lastMessageAt: string;
+  unreadCount: number;
+}
+
+export interface RemoteMessage {
+  id: string;
+  senderId: string | null;
+  senderName: string;
+  side: "buyer" | "supplier";
+  kind: string;
+  body: string;
+  attachmentRef: string | null;
+  readAt: string | null;
+  at: string;
+}
+
 export interface ProductQuery {
   q?: string;
   category?: string;
@@ -243,8 +344,80 @@ export const api = {
       request<{ quotes: ShippingQuote[] }>("/api/v1/shipping/quotes", { query: { subtotal, from, to }, signal }),
   },
 
+
+  rfq: {
+    list: (query: { status?: string; page?: number; perPage?: number } = {}, signal?: AbortSignal) =>
+      request<Page<RemoteRfq>>("/api/v1/rfqs", { query, signal }),
+    get: (id: string, signal?: AbortSignal) => request<RemoteRfq>(`/api/v1/rfqs/${id}`, { signal }),
+    create: (input: {
+      title: string; categoryId: string; productId?: string | null; qty: number; unit: Unit;
+      targetPrice?: number | null; specs?: string; neededBy: string; deliveryCity: string;
+      deliveryCountry: string; paymentTerms?: string; shippingTerms?: string; notes?: string;
+      supplierIds: string[];
+    }) => request<RemoteRfq>("/api/v1/rfqs", { method: "POST", body: input }),
+    submitQuote: (rfqId: string, input: {
+      unitPrice: number; moq: number; leadTimeDays: number; shippingCost?: number;
+      shippingTerms?: string; paymentTerms?: string; validDays?: number; notes?: string;
+    }) => request<RemoteRfq>(`/api/v1/rfqs/${rfqId}/quotes`, { method: "POST", body: input }),
+    award: (rfqId: string, quoteId: string) =>
+      request<RemoteRfq>(`/api/v1/rfqs/${rfqId}/award/${quoteId}`, { method: "POST" }),
+    close: (rfqId: string) => request<RemoteRfq>(`/api/v1/rfqs/${rfqId}/close`, { method: "POST" }),
+  },
+
+  negotiations: {
+    list: (query: { status?: string; page?: number; perPage?: number } = {}, signal?: AbortSignal) =>
+      request<Page<RemoteNegotiation>>("/api/v1/negotiations", { query, signal }),
+    get: (id: string, signal?: AbortSignal) => request<RemoteNegotiation>(`/api/v1/negotiations/${id}`, { signal }),
+    start: (input: NegotiationTerms & { productId: string; message?: string; rfqId?: string | null; quoteId?: string | null }) =>
+      request<RemoteNegotiation>("/api/v1/negotiations", { method: "POST", body: input }),
+    counter: (id: string, terms: NegotiationTerms & { message?: string }) =>
+      request<RemoteNegotiation>(`/api/v1/negotiations/${id}/counter`, { method: "POST", body: terms }),
+    decide: (id: string, decision: "accept" | "reject") =>
+      request<RemoteNegotiation>(`/api/v1/negotiations/${id}/${decision}`, { method: "POST" }),
+    convert: (id: string) =>
+      request<{ orderId: string; reference: string }>(`/api/v1/negotiations/${id}/convert`, { method: "POST" }),
+  },
+
+  messaging: {
+    threads: (signal?: AbortSignal) => request<{ threads: RemoteThread[] }>("/api/v1/threads", { signal }),
+    open: (supplierId: string, subject: string) =>
+      request<{ id: string; subject: I18nText }>("/api/v1/threads", { method: "POST", body: { supplierId, subject } }),
+    messages: (threadId: string, signal?: AbortSignal) =>
+      request<{ thread: { id: string; buyerCompanyId: string; supplierId: string; subject: I18nText }; messages: RemoteMessage[] }>(
+        `/api/v1/threads/${threadId}/messages`,
+        { signal },
+      ),
+    send: (threadId: string, body: string) =>
+      request<{ id: string; at: string }>(`/api/v1/threads/${threadId}/messages`, { method: "POST", body: { body } }),
+    markRead: (threadId: string) => request<void>(`/api/v1/threads/${threadId}/read`, { method: "POST" }),
+  },
+
+  admin: {
+    stats: (signal?: AbortSignal) =>
+      request<{
+        users: number; companies: number; suppliers: number; products: number; orders: number;
+        openRfqs: number; activeNegotiations: number; pendingVerification: number;
+        gmv: number; avgOrderValue: number;
+      }>("/api/v1/admin/stats", { signal }),
+    companies: (query: { verification?: string; page?: number; perPage?: number } = {}, signal?: AbortSignal) =>
+      request<Page<{
+        id: string; name: I18nText; logo: string; taxId: string; email: string;
+        countryCode: string; city: string; verification: string; memberSince: string; isSupplier: boolean;
+      }>>("/api/v1/admin/companies", { query, signal }),
+    setVerification: (companyId: string, status: string) =>
+      request<{ id: string; verification: string }>(`/api/v1/admin/companies/${companyId}/verification`, {
+        method: "PATCH",
+        body: { status },
+      }),
+    audit: (query: { page?: number; perPage?: number } = {}, signal?: AbortSignal) =>
+      request<Page<{ id: number; actorId: string | null; action: string; target: string; at: string }>>(
+        "/api/v1/admin/audit",
+        { query, signal },
+      ),
+  },
+
   notifications: {
-    list: (query: { unreadOnly?: boolean; page?: number } = {}, signal?: AbortSignal) =>
+    list: (query: { unreadOnly?: boolean; page?: number; perPage?: number } = {}, signal?: AbortSignal) =>
       request<Page<{ id: string; kind: string; title: I18nText; body: I18nText; href: string; channels: string[]; read: boolean; at: string }> & { unreadCount: number }>(
         "/api/v1/notifications",
         { query: query as Record<string, string>, signal },
