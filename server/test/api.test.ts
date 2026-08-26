@@ -574,6 +574,131 @@ describe("admin", () => {
   });
 });
 
+
+describe("analytics", () => {
+  let buyerToken: string;
+  let supplierToken: string;
+
+  before(async () => {
+    buyerToken = (await login("buy-1@waw.example.com")).accessToken;
+    supplierToken = (await login("sup-1@waw.example.com")).accessToken;
+  });
+
+  it("requires a buyer for buyer analytics", async () => {
+    const res = await call("GET", "/api/v1/analytics/buyer", { token: supplierToken });
+    assert.equal(res.status, 403);
+  });
+
+  it("requires a supplier for supplier analytics", async () => {
+    const res = await call("GET", "/api/v1/analytics/supplier", { token: buyerToken });
+    assert.equal(res.status, 403);
+  });
+
+  it("reports buyer spend consistent with its own parts", async () => {
+    const res = await call("GET", "/api/v1/analytics/buyer", { token: buyerToken });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.totalSpend > 0);
+    assert.ok(res.body.orderCount > 0);
+
+    const expectedAvg = Math.round((res.body.totalSpend / res.body.orderCount) * 100) / 100;
+    assert.ok(Math.abs(res.body.avgOrderValue - expectedAvg) < 0.02, "average must equal spend over orders");
+
+    const monthlyTotal = res.body.monthly.reduce((s: number, m: any) => s + m.value, 0);
+    assert.ok(Math.abs(monthlyTotal - res.body.totalSpend) < 1, "monthly buckets must sum to total spend");
+
+    for (const c of res.body.topCategories) assert.ok(c.share > 0 && c.share <= 100);
+  });
+
+  it("never suggests a reorder cadence shorter than a few days", async () => {
+    const res = await call("GET", "/api/v1/analytics/buyer/reorders", { token: buyerToken });
+    assert.equal(res.status, 200);
+    for (const s of res.body.suggestions) {
+      assert.ok(s.avgIntervalDays >= 3, `implausible cadence: ${s.avgIntervalDays} days`);
+      assert.ok(s.suggestedQty > 0);
+      assert.ok(["overdue", "soon", "later"].includes(s.urgency));
+    }
+  });
+
+  it("reports supplier revenue and inventory", async () => {
+    const res = await call("GET", "/api/v1/analytics/supplier", { token: supplierToken });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.revenue > 0);
+    assert.ok(res.body.productCount > 0);
+    const monthlyTotal = res.body.monthly.reduce((s: number, m: any) => s + m.value, 0);
+    assert.ok(Math.abs(monthlyTotal - res.body.revenue) < 1, "monthly revenue must sum to total");
+  });
+
+  it("scopes supplier revenue to that supplier's own lines", async () => {
+    const mine = await call("GET", "/api/v1/analytics/supplier", { token: supplierToken });
+    const other = (await login("sup-2@waw.example.com")).accessToken;
+    const theirs = await call("GET", "/api/v1/analytics/supplier", { token: other });
+    assert.notEqual(mine.body.revenue, theirs.body.revenue);
+  });
+
+  it("compares demand windows of equal length", async () => {
+    const res = await call("GET", "/api/v1/intelligence/categories", { token: buyerToken });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.categories.length > 0);
+    // A uniformly positive set across every category is the signature of the
+    // off-by-one window bug this guards against.
+    const changes = res.body.categories.map((c: any) => c.changeMonthPct);
+    assert.ok(changes.some((c: number) => c < 0), `all categories rose: ${changes.join(", ")}`);
+    for (const c of res.body.categories) {
+      assert.ok(Math.abs(c.changeMonthPct) < 100, `implausible swing: ${c.changeMonthPct}%`);
+      assert.ok(c.productCount > 0);
+    }
+  });
+
+  it("ranks suppliers deterministically by score", async () => {
+    const res = await call("GET", "/api/v1/intelligence/suppliers", { token: buyerToken });
+    assert.equal(res.status, 200);
+    const scores = res.body.suppliers.map((s: any) => s.score);
+    assert.deepEqual(scores, [...scores].sort((a: number, b: number) => b - a));
+  });
+
+  it("returns regional demand shares that add up", async () => {
+    const res = await call("GET", "/api/v1/intelligence/regions", { token: buyerToken });
+    const total = res.body.regions.reduce((s: number, r: any) => s + r.share, 0);
+    assert.ok(Math.abs(total - 100) < 0.5, `shares total ${total}`);
+  });
+
+  it("forecasts with a band that widens over the horizon", async () => {
+    const list = await call("GET", "/api/v1/products?perPage=1");
+    const res = await call("GET", `/api/v1/forecast/${list.body.items[0].id}`, { token: buyerToken });
+    assert.equal(res.status, 200);
+
+    const f = res.body.forecast;
+    assert.ok(f.history.length >= 20);
+    assert.equal(f.projection.length, 8);
+    assert.ok(f.confidence >= 0 && f.confidence <= 100);
+    assert.ok(["rising", "flat", "declining"].includes(f.direction));
+
+    for (const p of f.projection) {
+      assert.ok(p.low <= p.volume && p.volume <= p.high, "projection must sit inside its band");
+      assert.ok(p.low >= 0, "demand cannot be negative");
+    }
+    const first = f.projection[0].high - f.projection[0].low;
+    const last = f.projection[7].high - f.projection[7].low;
+    assert.ok(last > first, "uncertainty must grow with the horizon");
+  });
+
+  it("404s a forecast for an unknown product", async () => {
+    const res = await call("GET", "/api/v1/forecast/00000000-0000-0000-0000-000000000000", { token: buyerToken });
+    assert.equal(res.status, 404);
+  });
+
+  it("refuses analytics to anonymous callers", async () => {
+    for (const path of [
+      "/api/v1/analytics/buyer",
+      "/api/v1/intelligence/categories",
+      "/api/v1/intelligence/suppliers",
+    ]) {
+      const res = await call("GET", path);
+      assert.equal(res.status, 401, path);
+    }
+  });
+});
+
 describe("input validation", () => {
   it("rejects a malformed uuid", async () => {
     const res = await call("GET", "/api/v1/products/not-a-uuid");
