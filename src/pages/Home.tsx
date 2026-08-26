@@ -1,15 +1,12 @@
 import { ArrowLeft, ArrowRight, ShieldCheck, Sparkles, TrendingDown, TrendingUp, Truck, Wallet } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, catalog } from "../platform/api";
-import { categoryIndices, priceAlerts, trendingProducts } from "../platform/intelligence";
-import { suggestedPrompts } from "../platform/ai/assistant";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery, useCurrentUser } from "../platform/remote/useApi";
 import { ProductCard } from "../components/ProductCard";
 import { SupplierCard } from "../components/SupplierCard";
 import { Badge, Button, Card, Sparkline, cx } from "../ui";
-import { mainCategories, subCategories } from "../platform/data/catalog";
-import { priceSeries } from "../platform/intelligence";
+import type { RemoteProduct } from "../platform/remote/endpoints";
 
 function SectionHeader({ title, href, cta }: { title: string; href?: string; cta?: string }) {
   const { dir } = useI18n();
@@ -28,11 +25,13 @@ function SectionHeader({ title, href, cta }: { title: string; href?: string; cta
 }
 
 function Hero() {
-  const { d, t, n } = useI18n();
+  const { d, t, n, locale } = useI18n();
   const { navigate } = useRouter();
-  const { locale } = useI18n();
-  const prompts = suggestedPrompts(locale).slice(0, 3);
-  const db = useDatabase();
+
+  const promptsQuery = useApiQuery((signal) => api.ai.prompts(signal), []);
+  const statsQuery = useApiQuery((signal) => api.platform.stats(signal), []);
+  const prompts = (promptsQuery.data?.prompts[locale] ?? []).slice(0, 3);
+  const stats = statsQuery.data;
 
   return (
     <section className="relative overflow-hidden bg-primary text-primary-foreground">
@@ -53,20 +52,22 @@ function Hero() {
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-ink-300 sm:text-lg">{t(d.home.heroSub)}</p>
         </div>
 
-        <div className="mt-8 max-w-3xl">
-          <div className="flex flex-wrap gap-2">
-            {prompts.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => navigate(`/ai?q=${encodeURIComponent(p)}`)}
-                className="cursor-pointer rounded-full border border-white/20 bg-white/5 px-4 py-2 text-start text-xs font-semibold text-ink-200 transition-colors hover:border-brand-400 hover:bg-white/10 hover:text-white"
-              >
-                {p}
-              </button>
-            ))}
+        {prompts.length > 0 && (
+          <div className="mt-8 max-w-3xl">
+            <div className="flex flex-wrap gap-2">
+              {prompts.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => navigate(`/ai?q=${encodeURIComponent(p)}`)}
+                  className="cursor-pointer rounded-full border border-white/20 bg-white/5 px-4 py-2 text-start text-xs font-semibold text-ink-200 transition-colors hover:border-brand-400 hover:bg-white/10 hover:text-white"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="mt-10 flex flex-wrap gap-3">
           <Link to="/search">
@@ -81,17 +82,17 @@ function Hero() {
 
         <dl className="mt-12 grid grid-cols-2 gap-6 border-t border-white/10 pt-8 sm:grid-cols-4">
           {[
-            { label: d.supplier.directory, value: db.suppliers.length, icon: ShieldCheck },
-            { label: d.supplier.products, value: db.products.length, icon: Wallet },
-            { label: d.nav.orders, value: db.orders.length, icon: Truck },
-            { label: d.nav.rfq, value: db.rfqs.length, icon: Sparkles },
+            { label: d.supplier.directory, value: stats?.suppliers, icon: ShieldCheck },
+            { label: d.supplier.products, value: stats?.products, icon: Wallet },
+            { label: d.nav.orders, value: stats?.orders, icon: Truck },
+            { label: d.nav.rfq, value: stats?.rfqs, icon: Sparkles },
           ].map(({ label, value, icon: Icon }, i) => (
             <div key={i}>
               <dt className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-400">
                 <Icon className="h-3.5 w-3.5" />
                 {t(label)}
               </dt>
-              <dd className="num mt-1.5 text-2xl font-extrabold">{n(value)}+</dd>
+              <dd className="num mt-1.5 text-2xl font-extrabold">{value == null ? "—" : `${n(value)}+`}</dd>
             </div>
           ))}
         </dl>
@@ -102,8 +103,12 @@ function Hero() {
 
 function MarketPulse() {
   const { d, t, money, n } = useI18n();
-  const indices = categoryIndices().slice(0, 4);
-  const alerts = priceAlerts(4, 4);
+  const indicesQuery = useApiQuery((signal) => api.intelligence.categories(signal), []);
+  const alertsQuery = useApiQuery((signal) => api.intelligence.alerts(signal), []);
+  const indices = (indicesQuery.data?.categories ?? []).slice(0, 4);
+  const alerts = (alertsQuery.data?.alerts ?? []).slice(0, 4);
+
+  if (!indices.length && !alerts.length) return null;
 
   return (
     <section className="container-x py-12">
@@ -114,13 +119,13 @@ function MarketPulse() {
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {indices.map((idx) => (
               <Link
-                key={idx.category.id}
-                to={`/search?category=${idx.category.id}`}
+                key={idx.categoryId}
+                to={`/search?category=${idx.categoryId}`}
                 className="flex items-center gap-3 rounded-xl border border-border p-3 transition-colors hover:border-accent hover:bg-accent-soft/40"
               >
-                <span className="text-2xl">{idx.category.icon}</span>
+                <span className="text-2xl">{idx.icon}</span>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-extrabold text-foreground">{t(idx.category.name)}</div>
+                  <div className="truncate text-xs font-extrabold text-foreground">{t(idx.name)}</div>
                   <div className="num text-[11px] text-muted-foreground">{money(idx.avgPrice)}</div>
                 </div>
                 <span className={cx("num inline-flex items-center gap-0.5 text-xs font-extrabold", idx.changeMonthPct >= 0 ? "text-danger" : "text-success")}>
@@ -136,11 +141,11 @@ function MarketPulse() {
           <h3 className="text-sm font-extrabold text-foreground">{t(d.intelligence.priceAlerts)}</h3>
           <ul className="mt-4 space-y-3">
             {alerts.map((a) => (
-              <li key={a.product.id}>
-                <Link to={`/product/${a.product.id}`} className="flex items-center gap-3 hover:opacity-80">
-                  <span className="text-xl">{a.product.image}</span>
+              <li key={a.productId}>
+                <Link to={`/product/${a.productId}`} className="flex items-center gap-3 hover:opacity-80">
+                  <span className="text-xl">{a.image}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-bold text-foreground">{t(a.product.name)}</span>
+                    <span className="block truncate text-xs font-bold text-foreground">{t(a.name)}</span>
                     <span className="num block text-[11px] text-muted-foreground">{money(a.current)}</span>
                   </span>
                   <span className={cx("num text-xs font-extrabold", a.direction === "up" ? "text-danger" : "text-success")}>
@@ -158,27 +163,35 @@ function MarketPulse() {
 
 function Categories() {
   const { d, t } = useI18n();
+  const categoriesQuery = useApiQuery(() => api.reference.categories(), []);
+  const all = categoriesQuery.data?.categories ?? [];
+  const roots = all.filter((c) => c.parentId === null);
+  if (!roots.length) return null;
+
   return (
     <section className="container-x py-12">
       <SectionHeader title={t(d.home.shopByCategory)} href="/search" cta={t(d.action.viewAll)} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {mainCategories.map((cat) => (
-          <Link
-            key={cat.id}
-            to={`/search?category=${cat.id}`}
-            className="group flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card p-5 text-center transition-all hover:border-accent hover:shadow-[var(--shadow-raised)]"
-          >
-            <span className="text-3xl transition-transform group-hover:scale-110">{cat.icon}</span>
-            <span className="text-xs font-extrabold leading-snug text-foreground">{t(cat.name)}</span>
-            <span className="text-[10px] text-muted-foreground">{subCategories(cat.id).length || "—"}</span>
-          </Link>
-        ))}
+        {roots.slice(0, 6).map((cat) => {
+          const children = all.filter((c) => c.parentId === cat.id).length;
+          return (
+            <Link
+              key={cat.id}
+              to={`/search?category=${cat.id}`}
+              className="group flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card p-5 text-center transition-all hover:border-accent hover:shadow-[var(--shadow-raised)]"
+            >
+              <span className="text-3xl transition-transform group-hover:scale-110">{cat.icon}</span>
+              <span className="text-xs font-extrabold leading-snug text-foreground">{t(cat.name)}</span>
+              <span className="text-[10px] text-muted-foreground">{children || "—"}</span>
+            </Link>
+          );
+        })}
       </div>
     </section>
   );
 }
 
-function ProductRail({ title, products, href }: { title: string; products: ReturnType<typeof catalog.products>; href: string }) {
+function ProductRail({ title, products, href }: { title: string; products: RemoteProduct[]; href: string }) {
   const { d, t } = useI18n();
   if (!products.length) return null;
   return (
@@ -195,35 +208,33 @@ function ProductRail({ title, products, href }: { title: string; products: Retur
 
 function Trending() {
   const { d, t, n } = useI18n();
-  const items = trendingProducts(6);
+  const trendingQuery = useApiQuery((signal) => api.intelligence.trending(signal), []);
+  const items = (trendingQuery.data?.trending ?? []).slice(0, 6);
   if (!items.length) return null;
 
   return (
     <section className="container-x py-12">
       <SectionHeader title={t(d.home.trending)} href="/intelligence" cta={t(d.action.viewAll)} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map(({ product, demandGrowthPct, priceChangePct }) => {
-          const series = priceSeries(product.id);
-          return (
-            <Link
-              key={product.id}
-              to={`/product/${product.id}`}
-              className="flex items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-all hover:border-accent hover:shadow-[var(--shadow-raised)]"
-            >
-              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl">{product.image}</span>
-              <div className="min-w-0 flex-1">
-                <div className="line-clamp-1 text-sm font-bold text-foreground">{t(product.name)}</div>
-                <div className="num mt-1 text-[11px] font-semibold text-success">
-                  ▲ {n(demandGrowthPct)}% {t(d.intelligence.demandIndex)}
-                </div>
-                {series && <Sparkline points={series.points.map((p) => p.volume)} tone="success" className="mt-1.5" />}
+        {items.map((item) => (
+          <Link
+            key={item.productId}
+            to={`/product/${item.productId}`}
+            className="flex items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-all hover:border-accent hover:shadow-[var(--shadow-raised)]"
+          >
+            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl">{item.image}</span>
+            <div className="min-w-0 flex-1">
+              <div className="line-clamp-1 text-sm font-bold text-foreground">{t(item.name)}</div>
+              <div className="num mt-1 text-[11px] font-semibold text-success">
+                ▲ {n(item.demandGrowthPct)}% {t(d.intelligence.demandIndex)}
               </div>
-              <span className={cx("num shrink-0 text-xs font-extrabold", priceChangePct >= 0 ? "text-danger" : "text-success")}>
-                {priceChangePct >= 0 ? "+" : ""}{n(priceChangePct)}%
-              </span>
-            </Link>
-          );
-        })}
+              {item.volumes.length > 1 && <Sparkline points={item.volumes} tone="success" className="mt-1.5" />}
+            </div>
+            <span className={cx("num shrink-0 text-xs font-extrabold", item.priceChangePct >= 0 ? "text-danger" : "text-success")}>
+              {item.priceChangePct >= 0 ? "+" : ""}{n(item.priceChangePct)}%
+            </span>
+          </Link>
+        ))}
       </div>
     </section>
   );
@@ -254,29 +265,34 @@ function RolePanels() {
 
 export default function Home() {
   const { d, t } = useI18n();
-  useDatabase();
-  const user = auth.currentUser();
+  const user = useCurrentUser();
+
+  const featuredQuery = useApiQuery((signal) => api.catalog.products({ sort: "rating", perPage: 10 }, signal), []);
+  const popularQuery = useApiQuery((signal) => api.catalog.products({ sort: "popular", perPage: 10 }, signal), []);
+  const suppliersQuery = useApiQuery((signal) => api.catalog.suppliers({ perPage: 6 }, signal), []);
 
   return (
     <>
       <Hero />
       <Categories />
       <MarketPulse />
-      <ProductRail title={t(d.home.featuredProducts)} products={catalog.featuredProducts(10)} href="/search?sort=rating" />
+      <ProductRail title={t(d.home.featuredProducts)} products={featuredQuery.data?.items ?? []} href="/search?sort=rating" />
       <Trending />
 
-      <section className="container-x py-12">
-        <SectionHeader title={t(d.home.featuredSuppliers)} href="/suppliers" cta={t(d.action.viewAll)} />
-        <div className="rail">
-          {catalog.featuredSuppliers(6).map((s) => (
-            <SupplierCard key={s.id} supplier={s} compact />
-          ))}
-        </div>
-      </section>
+      {(suppliersQuery.data?.items ?? []).length > 0 && (
+        <section className="container-x py-12">
+          <SectionHeader title={t(d.home.featuredSuppliers)} href="/suppliers" cta={t(d.action.viewAll)} />
+          <div className="rail">
+            {(suppliersQuery.data?.items ?? []).map((s) => (
+              <SupplierCard key={s.id} supplier={s} compact />
+            ))}
+          </div>
+        </section>
+      )}
 
       <ProductRail
         title={t(user ? d.home.recommended : d.home.bestSellers)}
-        products={catalog.bestSellers(10)}
+        products={popularQuery.data?.items ?? []}
         href="/search?sort=popular"
       />
       <RolePanels />

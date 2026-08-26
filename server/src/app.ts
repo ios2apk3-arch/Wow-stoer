@@ -17,6 +17,7 @@ import { registerMessagingRoutes } from "./routes/messaging.ts";
 import { registerNotificationRoutes } from "./routes/notifications.ts";
 import { registerAdminRoutes } from "./routes/admin.ts";
 import { registerAnalyticsRoutes } from "./routes/analytics.ts";
+import { registerAiRoutes } from "./routes/ai.ts";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -100,6 +101,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     await registerNotificationRoutes(api);
     await registerAdminRoutes(api);
     await registerAnalyticsRoutes(api);
+    await registerAiRoutes(api);
   }, { prefix: "/api/v1" });
 
   return app;

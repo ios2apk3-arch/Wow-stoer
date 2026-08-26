@@ -466,6 +466,7 @@ export const dictionary = {
       en: "Sign in to access this page.",
     },
     noPermission: { ar: "لا تملك صلاحية لهذه الصفحة", en: "You don't have access to this page" },
+    error: { ar: "تعذّر إتمام العملية، حاول مرة أخرى.", en: "Something went wrong — please try again." },
     today: { ar: "اليوم", en: "Today" },
     yesterday: { ar: "أمس", en: "Yesterday" },
     daysAgo: { ar: "منذ {n} يومًا", en: "{n} days ago" },

@@ -284,6 +284,7 @@ export interface TrendingProduct {
   recentVolume: number;
   demandGrowthPct: number;
   priceChangePct: number;
+  volumes: number[];
 }
 
 export interface SupplierRanking {
@@ -343,6 +344,64 @@ export interface ProductQuery {
   sort?: string;
   page?: number;
   perPage?: number;
+}
+
+export type AiIntent =
+  | "search" | "rfq" | "negotiate" | "reorder" | "track_order"
+  | "price_analysis" | "supplier_match" | "forecast" | "greeting" | "unknown";
+
+export interface AiParsedQuery {
+  raw: string;
+  intent: AiIntent;
+  keywords: string[];
+  qty: number | null;
+  unit: Unit | null;
+  budget: number | null;
+  budgetKind: "max" | "target" | null;
+  city: string | null;
+  countryCode: string | null;
+  withinDays: number | null;
+  paymentTerms: string | null;
+  wantsCheapest: boolean;
+  wantsFastest: boolean;
+  wantsVerified: boolean;
+  confidence: number;
+}
+
+export interface AiSupplierMatch {
+  productId: string;
+  supplierId: string;
+  supplierName: I18nText;
+  supplierLogo: string;
+  name: I18nText;
+  image: string;
+  unitPrice: number;
+  lineTotal: number;
+  leadTimeDays: number;
+  moq: number;
+  availability: Availability;
+  rating: number;
+  verified: boolean;
+  meetsBudget: boolean;
+  meetsDeadline: boolean;
+  meetsMoq: boolean;
+  matchScore: number;
+  reasons: I18nText[];
+}
+
+export type AiAction =
+  | { kind: "view_product"; productId: string; label: I18nText }
+  | { kind: "add_to_cart"; productId: string; qty: number; label: I18nText }
+  | { kind: "create_rfq"; label: I18nText }
+  | { kind: "negotiate"; productId: string; qty: number; targetPrice: number; label: I18nText }
+  | { kind: "navigate"; href: string; label: I18nText };
+
+export interface AiReply {
+  parsed: AiParsedQuery;
+  headline: I18nText;
+  body: I18nText[];
+  matches: AiSupplierMatch[];
+  actions: AiAction[];
 }
 
 export const api = {
@@ -536,6 +595,11 @@ export const api = {
     supplier: (signal?: AbortSignal) => request<SupplierAnalytics>("/api/v1/analytics/supplier", { signal }),
   },
 
+  platform: {
+    stats: (signal?: AbortSignal) =>
+      request<{ suppliers: number; products: number; orders: number; rfqs: number }>("/api/v1/stats", { signal }),
+  },
+
   intelligence: {
     categories: (signal?: AbortSignal) =>
       request<{ categories: CategoryIndex[] }>("/api/v1/intelligence/categories", { signal }),
@@ -550,6 +614,13 @@ export const api = {
         `/api/v1/forecast/${productId}`,
         { signal },
       ),
+  },
+
+  ai: {
+    query: (q: string, signal?: AbortSignal) =>
+      request<AiReply>("/api/v1/ai/query", { method: "POST", body: { q }, signal }),
+    prompts: (signal?: AbortSignal) =>
+      request<{ prompts: { ar: string[]; en: string[] } }>("/api/v1/ai/prompts", { signal }),
   },
 
   notifications: {

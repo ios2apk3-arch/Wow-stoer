@@ -5,7 +5,6 @@ import { useI18n } from "../i18n";
 import { auth } from "../platform/api";
 import { api } from "../platform/remote/endpoints";
 import { useApiQuery } from "../platform/remote/useApi";
-import { parse } from "../platform/ai/nlu";
 import { categories as allCategories, countries, mainCategories } from "../platform/data/catalog";
 import { Badge, Button, Card, Checkbox, Field, Input, Select, Textarea, useToast } from "../ui";
 import RequireAuth from "./RequireAuth";
@@ -29,7 +28,32 @@ function RfqNewInner() {
   );
   const prefillProduct = productQuery.data?.product ?? null;
   const aiQuery = query.get("ai") ?? "";
-  const parsed = useMemo(() => (aiQuery ? parse(aiQuery) : null), [aiQuery]);
+
+  /**
+   * The assistant already parsed the request on the server and put the slots
+   * it extracted in the link, so the form reads them rather than re-parsing
+   * the sentence with a second, separately-maintained parser.
+   */
+  const parsed = useMemo(() => {
+    if (!aiQuery) return null;
+    const number = (key: string) => {
+      const raw = query.get(key);
+      const value = raw == null ? NaN : Number(raw);
+      return Number.isFinite(value) ? value : null;
+    };
+    const title = query.get("title") ?? "";
+    return {
+      raw: aiQuery,
+      keywords: title ? title.split(/\s+/).filter(Boolean) : [],
+      qty: number("qty"),
+      unit: (unitOptions as string[]).includes(query.get("unit") ?? "") ? (query.get("unit") as Unit) : null,
+      budget: number("budget"),
+      city: query.get("city"),
+      countryCode: query.get("country"),
+      withinDays: number("days"),
+      paymentTerms: query.get("terms"),
+    };
+  }, [aiQuery, query]);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState("");
 

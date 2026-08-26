@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { Heart, MessageSquare, Minus, Package, Plus, Timer, TrendingDown, TrendingUp, Truck } from "lucide-react";
 import { Link, useRouter } from "../app/router";
 import { useI18n } from "../i18n";
-import { auth, messaging, negotiation } from "../platform/api";
+import { auth } from "../platform/api";
 import { api } from "../platform/remote/endpoints";
 import { useApiQuery } from "../platform/remote/useApi";
+import { ApiError } from "../platform/remote/http";
 import { useFavorites } from "../platform/remote/useFavorites";
 import { tierFor, tierSavingPct, unitLabel, unitPrice } from "../platform/pricing";
 import { categoryById } from "../platform/data/catalog";
@@ -14,7 +15,7 @@ import { Badge, Button, Card, Field, Input, Modal, Rating, Sparkline, Textarea, 
 import NotFound from "./NotFound";
 
 export default function ProductPage({ id }: { id: string }) {
-  const { d, t, n, money, date } = useI18n();
+  const { d, t, n, money, date, locale } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
 
@@ -82,46 +83,56 @@ export default function ProductPage({ id }: { id: string }) {
   const saving = tierSavingPct(product, qty);
   const belowMoq = qty < product.moq;
   const user = auth.currentUser();
+  const [busy, setBusy] = useState(false);
 
   const similar = (similarQuery.data?.items ?? []).filter((p) => p.id !== product.id).slice(0, 5);
 
-  const openNegotiation = () => {
-    const buyerCompany = auth.currentCompany();
-    if (!buyerCompany) {
+  const openNegotiation = async () => {
+    if (!auth.currentCompany()) {
       navigate("/login");
       return;
     }
-    negotiation.start({
-      productId: product.id,
-      buyerCompanyId: buyerCompany.id,
-      supplierId: product.supplierId,
-      actorName: user?.name ?? "Buyer",
-      terms: {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.negotiations.start({
+        productId: product.id,
         unitPrice: targetPrice || Math.round(price * 0.9 * 100) / 100,
         qty,
         moq: product.moq,
         shippingCost: 0,
         shippingTerms: "DDP",
         paymentTerms: "net_30",
-      },
-      message: negotiateMessage,
-    });
-    setNegotiateOpen(false);
-    toast.push(t(d.negotiation.title));
-    navigate("/negotiations");
+        message: negotiateMessage,
+      });
+      setNegotiateOpen(false);
+      toast.push(t(d.negotiation.title));
+      navigate("/negotiations");
+    } catch (error) {
+      toast.push(error instanceof ApiError ? error.message : t(d.common.error), "danger");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const messageSupplier = () => {
-    const buyerCompany = auth.currentCompany();
-    if (!buyerCompany) {
+  const messageSupplier = async () => {
+    if (!auth.currentCompany()) {
       navigate("/login");
       return;
     }
-    const thread = messaging.openThread(buyerCompany.id, product.supplierId, {
-      ar: `استفسار عن ${product.name.ar}`,
-      en: `Enquiry about ${product.name.en}`,
-    });
-    navigate(`/messages?thread=${thread.id}`);
+    if (busy) return;
+    setBusy(true);
+    try {
+      const thread = await api.messaging.open(
+        product.supplierId,
+        locale === "ar" ? `استفسار عن ${product.name.ar}` : `Enquiry about ${product.name.en}`,
+      );
+      navigate(`/messages?thread=${thread.id}`);
+    } catch (error) {
+      toast.push(error instanceof ApiError ? error.message : t(d.common.error), "danger");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -351,7 +362,7 @@ export default function ProductPage({ id }: { id: string }) {
                 >
                   {t(d.action.negotiate)}
                 </Button>
-                <Button variant="ghost" onClick={messageSupplier}>
+                <Button variant="ghost" onClick={() => void messageSupplier()}>
                   <MessageSquare className="h-4 w-4" />
                   {t(d.action.message)}
                 </Button>
@@ -398,7 +409,7 @@ export default function ProductPage({ id }: { id: string }) {
         footer={
           <div className="flex gap-2.5">
             <Button variant="outline" onClick={() => setNegotiateOpen(false)}>{t(d.action.cancel)}</Button>
-            <Button fullWidth onClick={openNegotiation}>{t(d.action.submit)}</Button>
+            <Button fullWidth disabled={busy} onClick={() => void openNegotiation()}>{t(d.action.submit)}</Button>
           </div>
         }
       >

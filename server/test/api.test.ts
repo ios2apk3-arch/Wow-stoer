@@ -687,15 +687,131 @@ describe("analytics", () => {
     assert.equal(res.status, 404);
   });
 
-  it("refuses analytics to anonymous callers", async () => {
+  it("refuses per-company analytics to anonymous callers", async () => {
     for (const path of [
       "/api/v1/analytics/buyer",
-      "/api/v1/intelligence/categories",
+      "/api/v1/analytics/supplier",
       "/api/v1/intelligence/suppliers",
+      "/api/v1/intelligence/regions",
     ]) {
       const res = await call("GET", path);
       assert.equal(res.status, 401, path);
     }
+  });
+
+  it("serves aggregate market signals to anonymous callers", async () => {
+    // The home page shows these before anyone signs in; they name no company.
+    for (const path of [
+      "/api/v1/stats",
+      "/api/v1/intelligence/categories",
+      "/api/v1/intelligence/alerts",
+      "/api/v1/intelligence/trending",
+    ]) {
+      const res = await call("GET", path);
+      assert.equal(res.status, 200, path);
+    }
+  });
+});
+
+describe("assistant", () => {
+  let buyerToken: string;
+
+  before(async () => {
+    buyerToken = (await login("buy-1@waw.example.com")).accessToken;
+  });
+
+  it("extracts every slot from the flagship Arabic request", async () => {
+    const res = await call("POST", "/api/v1/ai/query", {
+      body: { q: "أحتاج 1000 كرتون مياه بسعر مناسب والتوصيل إلى الرياض خلال خمسة أيام" },
+    });
+    assert.equal(res.status, 200);
+    const p = res.body.parsed;
+    assert.equal(p.qty, 1000);
+    assert.equal(p.unit, "carton");
+    assert.equal(p.city, "الرياض");
+    assert.equal(p.countryCode, "SA");
+    assert.equal(p.withinDays, 5);
+    assert.equal(p.wantsCheapest, true);
+    assert.deepEqual(p.keywords, ["مياه"]);
+  });
+
+  it("answers that request from the live catalogue", async () => {
+    const res = await call("POST", "/api/v1/ai/query", {
+      body: { q: "أحتاج 1000 كرتون مياه بسعر مناسب والتوصيل إلى الرياض خلال خمسة أيام" },
+    });
+    assert.ok(res.body.matches.length > 0, "expected supplier matches");
+    for (const m of res.body.matches) {
+      assert.ok(m.reasons.length > 0, "every match must explain itself");
+      assert.ok(m.matchScore >= 0 && m.matchScore <= 100);
+      assert.ok(m.unitPrice > 0);
+    }
+    // Ranked, and not all pinned at the ceiling: the score has to discriminate.
+    const scores = res.body.matches.map((m: { matchScore: number }) => m.matchScore);
+    assert.deepEqual(scores, [...scores].sort((a: number, b: number) => b - a));
+    if (scores.length > 1) assert.notEqual(scores[0], scores[scores.length - 1]);
+  });
+
+  it("keeps one offer per supplier", async () => {
+    const res = await call("POST", "/api/v1/ai/query", { body: { q: "مياه" } });
+    const ids = res.body.matches.map((m: { supplierId: string }) => m.supplierId);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  it("matches through the Arabic article and hamza spellings", async () => {
+    // "الأرز" folds to the same skeleton as the listed "أرز بسمتي".
+    const res = await call("POST", "/api/v1/ai/query", {
+      body: { q: "أريد التفاوض على خصم لكمية كبيرة من الأرز" },
+    });
+    assert.equal(res.body.parsed.intent, "negotiate");
+    assert.ok(res.body.matches.length > 0, "prefixed spelling should still match");
+    assert.equal(res.body.actions[0].kind, "negotiate");
+    assert.ok(res.body.actions[0].targetPrice > 0);
+  });
+
+  it("reads the buyer's own orders for a tracking question", async () => {
+    const anon = await call("POST", "/api/v1/ai/query", { body: { q: "أين طلبي؟" } });
+    assert.equal(anon.body.parsed.intent, "track_order");
+    assert.equal(anon.body.actions[0].href, "/login");
+
+    const res = await call("POST", "/api/v1/ai/query", {
+      token: buyerToken,
+      body: { q: "أين طلبي؟" },
+    });
+    assert.equal(res.body.actions[0].href, "/orders");
+  });
+
+  it("answers a price question from recorded history", async () => {
+    const res = await call("POST", "/api/v1/ai/query", {
+      body: { q: "ما متوسط سعر زيت دوار الشمس هذا الشهر؟" },
+    });
+    assert.equal(res.body.parsed.intent, "price_analysis");
+    assert.ok(res.body.body.length >= 3);
+    assert.ok(res.body.actions.some((a: { kind: string }) => a.kind === "view_product"));
+  });
+
+  it("greets without searching", async () => {
+    const res = await call("POST", "/api/v1/ai/query", { body: { q: "مرحبا" } });
+    assert.equal(res.body.parsed.intent, "greeting");
+    assert.equal(res.body.matches.length, 0);
+  });
+
+  it("says so plainly when nothing matches", async () => {
+    const res = await call("POST", "/api/v1/ai/query", { body: { q: "zzzqqxx" } });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.matches.length, 0);
+    assert.ok(res.body.body.length > 0, "a dead end still needs an explanation");
+  });
+
+  it("rejects an empty or oversized question", async () => {
+    assert.equal((await call("POST", "/api/v1/ai/query", { body: { q: "   " } })).status, 400);
+    assert.equal((await call("POST", "/api/v1/ai/query", { body: { q: "x".repeat(501) } })).status, 400);
+  });
+
+  it("offers prompts in both languages", async () => {
+    const res = await call("GET", "/api/v1/ai/prompts");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.prompts.ar.length, res.body.prompts.en.length);
+    assert.ok(res.body.prompts.ar.every((p: string) => p.trim().length > 0));
   });
 });
 

@@ -242,8 +242,26 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
 
   /* ----------------------------------------------------- intelligence */
 
-  app.get("/intelligence/categories", async (request) => {
-    requireAuth(request);
+  /** Public platform counters for the home page's marketing strip. */
+  app.get("/stats", async () => {
+    const [row] = await db.execute<{
+      suppliers: number; products: number; orders: number; rfqs: number;
+    }>(sql`
+      SELECT (SELECT count(*)::int FROM suppliers)                        AS suppliers,
+             (SELECT count(*)::int FROM products WHERE is_active)         AS products,
+             (SELECT count(*)::int FROM orders WHERE status <> 'cancelled') AS orders,
+             (SELECT count(*)::int FROM rfqs)                             AS rfqs
+    `);
+    return row;
+  });
+
+  /**
+   * Aggregate market signals — category indices, price alerts and trending
+   * items. They carry no company's identity, and the home page shows them to
+   * visitors who have not signed in yet, so these three are deliberately open
+   * while supplier rankings and regional demand stay behind auth.
+   */
+  app.get("/intelligence/categories", async () => {
     // Only top-level categories; a child rolls up into its parent.
     const rows = await db.execute<{
       id: string; name_ar: string; name_en: string; icon: string;
@@ -303,8 +321,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/intelligence/alerts", async (request) => {
-    requireAuth(request);
+  app.get("/intelligence/alerts", async () => {
     const rows = await db.execute<{
       id: string; name_ar: string; name_en: string; image: string; current: string; previous: string;
     }>(sql`
@@ -339,11 +356,10 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
     return { alerts };
   });
 
-  app.get("/intelligence/trending", async (request) => {
-    requireAuth(request);
+  app.get("/intelligence/trending", async () => {
     const rows = await db.execute<{
       id: string; name_ar: string; name_en: string; image: string;
-      recent: string; prior: string; current_price: string; month_price: string;
+      recent: string; prior: string; current_price: string; month_price: string; volumes: number[];
     }>(sql`
       WITH ranked AS (
         SELECT ph.product_id, ph.volume, ph.avg_price,
@@ -355,13 +371,16 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
                sum(volume) FILTER (WHERE rn <= 4)            AS recent,
                sum(volume) FILTER (WHERE rn BETWEEN 5 AND 8) AS prior,
                max(avg_price) FILTER (WHERE rn = 1)          AS current_price,
-               max(avg_price) FILTER (WHERE rn = 5)          AS month_price
+               max(avg_price) FILTER (WHERE rn = 5)          AS month_price,
+               -- Oldest-to-newest, so the sparkline reads left to right.
+               array_agg(volume ORDER BY rn DESC) FILTER (WHERE rn <= 12) AS volumes
         FROM ranked GROUP BY product_id
       )
       SELECT p.id, p.name_ar, p.name_en, p.image,
              coalesce(w.recent, 0) AS recent, coalesce(w.prior, 0) AS prior,
              coalesce(w.current_price, 0) AS current_price,
-             coalesce(w.month_price, 0) AS month_price
+             coalesce(w.month_price, 0) AS month_price,
+             coalesce(w.volumes, '{}') AS volumes
       FROM products p
       JOIN windows w ON w.product_id = p.id
       WHERE p.is_active AND coalesce(w.prior, 0) > 0
@@ -382,6 +401,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
           recentVolume: Math.round(recent),
           demandGrowthPct: prior ? Math.round(((recent - prior) / prior) * 1000) / 10 : 0,
           priceChangePct: month ? Math.round(((current - month) / month) * 1000) / 10 : 0,
+          volumes: r.volumes ?? [],
         };
       }),
     };

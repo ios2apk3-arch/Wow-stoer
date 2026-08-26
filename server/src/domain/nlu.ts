@@ -1,12 +1,14 @@
-import type { Unit } from "../types";
+import type { Unit } from "./units.ts";
 
 /**
  * Rule-based natural-language understanding for Arabic and English commerce
- * queries. It is deterministic, offline and explainable: the assistant shows
- * the user exactly which slots it extracted, so a wrong reading is visible
+ * queries. It is deterministic, offline and explainable: the assistant returns
+ * exactly which slots it extracted, so a wrong reading is visible to the user
  * and correctable rather than silent.
  *
- * A hosted LLM can replace `parse()` behind the same `ParsedQuery` contract.
+ * This runs on the server so the parse and the catalogue search that follows
+ * it stay in one place, and so a hosted LLM can replace `parse()` behind the
+ * same `ParsedQuery` contract without touching any client.
  */
 
 export type Intent =
@@ -91,7 +93,7 @@ const intentRules: { intent: Intent; words: string[]; weight: number }[] = [
   { intent: "greeting", words: ["مرحبا", "السلام عليكم", "اهلا", "hi", "hello", "hey", "صباح الخير", "مساء الخير"], weight: 3 },
   { intent: "rfq", words: ["عرض سعر", "عروض اسعار", "طلب عرض", "rfq", "quotation", "quote me", "request a quote", "اطلب عرض"], weight: 5 },
   { intent: "negotiate", words: ["تفاوض", "افاوض", "خصم", "سعر افضل", "تخفيض", "negotiate", "discount", "better price", "counter offer"], weight: 5 },
-  { intent: "reorder", words: ["اعاده طلب", "اعيد الطلب", "نفس الطلب", "reorder", "order again", "repeat order", "اعاده الطلب"], weight: 5 },
+  { intent: "reorder", words: ["اعاده طلب", "اعيد الطلب", "نفس الطلب", "reorder", "order again", "repeat order", "اعاده الطلب", "اعيد طلبه", "ماذا اعيد", "ما الذي اعيد", "what should i reorder", "due for reorder"], weight: 5 },
   { intent: "track_order", words: ["اين طلبي", "تتبع", "حاله الطلب", "شحنتي", "track", "where is my order", "order status", "shipment"], weight: 5 },
   { intent: "price_analysis", words: ["متوسط السعر", "متوسط سعر", "تحليل الاسعار", "تحليل سعر", "سعر السوق", "السعر في السوق", "مقارنه اسعار", "price analysis", "market price", "average price", "compare prices"], weight: 5 },
   { intent: "supplier_match", words: ["مورد", "موردين", "افضل مورد", "supplier", "suppliers", "vendor", "manufacturer"], weight: 4 },
@@ -120,6 +122,8 @@ const stopWords = new Set([
   "delivery", "deliver", "delivered", "shipping", "within", "under", "below",
   "days", "day", "weeks", "ايام", "يوم", "يوما", "اشهر", "سنه",
   "where", "when", "how", "what", "which", "who",
+  // Regions — they narrow the destination, not the product
+  "الخليج", "الخليجي", "المنطقه", "السوق", "gulf", "region", "market",
   "ريال", "درهم", "دولار", "sar", "aed", "usd", "riyal",
 ]);
 

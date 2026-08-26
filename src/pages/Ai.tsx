@@ -1,33 +1,49 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Send, Sparkles, X } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { cart } from "../platform/api";
-import { respond, suggestedPrompts, type AiReply, type SupplierMatch } from "../platform/ai/assistant";
+import { api, type AiParsedQuery, type AiReply, type AiSupplierMatch } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
+import { ApiError } from "../platform/remote/http";
 import { Badge, Button, Card, Progress, Rating, useToast } from "../ui";
 
 interface Turn {
   id: number;
   question: string;
-  reply: AiReply;
+  reply: AiReply | null;
+  error?: string;
 }
 
-function MatchRow({ match }: { match: SupplierMatch }) {
+/** Carry the assistant's reading of the request into the RFQ form. */
+function rfqHref(p: AiParsedQuery): string {
+  const params = new URLSearchParams({ ai: p.raw });
+  if (p.keywords.length) params.set("title", p.keywords.join(" "));
+  if (p.qty != null) params.set("qty", String(p.qty));
+  if (p.unit) params.set("unit", p.unit);
+  if (p.budget != null) params.set("budget", String(p.budget));
+  if (p.city) params.set("city", p.city);
+  if (p.countryCode) params.set("country", p.countryCode);
+  if (p.withinDays != null) params.set("days", String(p.withinDays));
+  if (p.paymentTerms) params.set("terms", p.paymentTerms);
+  return `/rfq/new?${params.toString()}`;
+}
+
+function MatchRow({ match }: { match: AiSupplierMatch }) {
   const { d, t, n, money } = useI18n();
   const toast = useToast();
+  const [adding, setAdding] = useState(false);
 
   return (
     <Card className="p-4">
       <div className="flex flex-wrap items-start gap-4">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl">{match.product.image}</span>
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl">{match.image}</span>
 
         <div className="min-w-0 flex-1">
-          <Link to={`/product/${match.product.id}`} className="line-clamp-1 text-sm font-extrabold text-foreground hover:text-accent">
-            {t(match.product.name)}
+          <Link to={`/product/${match.productId}`} className="line-clamp-1 text-sm font-extrabold text-foreground hover:text-accent">
+            {t(match.name)}
           </Link>
           <Link to={`/supplier/${match.supplierId}`} className="mt-0.5 block truncate text-[11px] font-semibold text-muted-foreground hover:text-accent">
-            {t(match.name)}
+            {t(match.supplierName)}
           </Link>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <Rating value={match.rating} />
@@ -65,9 +81,17 @@ function MatchRow({ match }: { match: SupplierMatch }) {
           <Button
             size="sm"
             className="mt-3"
-            onClick={() => {
-              cart.add(match.product.id, Math.max(match.product.moq, 1));
-              toast.push(t(d.action.addToCart));
+            disabled={adding}
+            onClick={async () => {
+              setAdding(true);
+              try {
+                await api.cart.add(match.productId, Math.max(match.moq, 1));
+                toast.push(t(d.action.addToCart));
+              } catch (error) {
+                toast.push(error instanceof ApiError ? error.message : t(d.common.error), "danger");
+              } finally {
+                setAdding(false);
+              }
             }}
           >
             {t(d.action.addToCart)}
@@ -79,12 +103,31 @@ function MatchRow({ match }: { match: SupplierMatch }) {
 }
 
 function ReplyBlock({ turn }: { turn: Turn }) {
-  const { d, t, n, locale } = useI18n();
+  const { d, t, n } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
-  const { reply } = turn;
-  const p = reply.parsed;
+  const reply = turn.reply;
 
+  const question = (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">
+        {turn.question}
+      </div>
+    </div>
+  );
+
+  if (!reply) {
+    return (
+      <div className="space-y-4">
+        {question}
+        <Card className="border-danger/40 p-5">
+          <p className="text-sm font-semibold text-danger">{turn.error ?? t(d.common.error)}</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const p = reply.parsed;
   const slots = [
     p.qty != null && { label: d.rfq.quantity, value: n(p.qty) },
     p.unit && { label: d.product.unit, value: p.unit },
@@ -96,14 +139,8 @@ function ReplyBlock({ turn }: { turn: Turn }) {
 
   return (
     <div className="space-y-4">
-      {/* Question */}
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">
-          {turn.question}
-        </div>
-      </div>
+      {question}
 
-      {/* Understanding */}
       <Card className="border-accent/30 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-2 text-sm font-extrabold text-foreground">
@@ -151,20 +188,24 @@ function ReplyBlock({ turn }: { turn: Turn }) {
                 key={i}
                 size="sm"
                 variant={i === 0 ? "primary" : "outline"}
-                onClick={() => {
+                onClick={async () => {
                   switch (action.kind) {
                     case "view_product":
                       navigate(`/product/${action.productId}`);
                       break;
                     case "add_to_cart":
-                      cart.add(action.productId, action.qty);
-                      toast.push(t(d.action.addToCart));
+                      try {
+                        await api.cart.add(action.productId, action.qty);
+                        toast.push(t(d.action.addToCart));
+                      } catch (error) {
+                        toast.push(error instanceof ApiError ? error.message : t(d.common.error), "danger");
+                      }
                       break;
                     case "create_rfq":
-                      navigate(`/rfq/new?ai=${encodeURIComponent(p.raw)}`);
+                      navigate(rfqHref(p));
                       break;
                     case "negotiate":
-                      navigate(`/product/${action.productId}`);
+                      navigate(`/product/${action.productId}?qty=${action.qty}&target=${action.targetPrice}`);
                       break;
                     case "navigate":
                       navigate(action.href);
@@ -184,7 +225,7 @@ function ReplyBlock({ turn }: { turn: Turn }) {
           <h4 className="mb-3 text-xs font-extrabold text-muted-foreground">{t(d.ai.matches)}</h4>
           <div className="space-y-2.5">
             {reply.matches.map((m) => (
-              <MatchRow key={`${m.supplierId}-${m.product.id}`} match={m} />
+              <MatchRow key={`${m.supplierId}-${m.productId}`} match={m} />
             ))}
           </div>
         </div>
@@ -196,7 +237,6 @@ function ReplyBlock({ turn }: { turn: Turn }) {
 export default function AiPage() {
   const { d, t, locale } = useI18n();
   const { query, setQuery } = useRouter();
-  useDatabase();
 
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
@@ -204,16 +244,26 @@ export default function AiPage() {
   const endRef = useRef<HTMLDivElement>(null);
   const handledQuery = useRef<string | null>(null);
 
-  const ask = (question: string) => {
+  const promptsQuery = useApiQuery((signal) => api.ai.prompts(signal), []);
+  const prompts = promptsQuery.data?.prompts[locale] ?? [];
+
+  const ask = async (question: string) => {
     const q = question.trim();
-    if (!q) return;
+    if (!q || thinking) return;
     setDraft("");
     setThinking(true);
-    // A brief pause makes the extraction legible rather than instantaneous.
-    setTimeout(() => {
-      setTurns((prev) => [...prev, { id: Date.now(), question: q, reply: respond(q) }]);
+    const id = Date.now();
+    try {
+      const reply = await api.ai.query(q);
+      setTurns((prev) => [...prev, { id, question: q, reply }]);
+    } catch (error) {
+      setTurns((prev) => [
+        ...prev,
+        { id, question: q, reply: null, error: error instanceof ApiError ? error.message : t(d.common.error) },
+      ]);
+    } finally {
       setThinking(false);
-    }, 260);
+    }
   };
 
   // Honour ?q= from the header search box or a home-page prompt chip.
@@ -221,16 +271,15 @@ export default function AiPage() {
     const q = query.get("q");
     if (q && handledQuery.current !== q) {
       handledQuery.current = q;
-      ask(q);
+      void ask(q);
       setQuery({ q: null }, { replace: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, thinking]);
-
-  const prompts = suggestedPrompts(locale);
 
   return (
     <div className="container-x max-w-4xl py-8">
@@ -244,7 +293,7 @@ export default function AiPage() {
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{t(d.ai.subtitle)}</p>
       </header>
 
-      {turns.length === 0 && !thinking && (
+      {turns.length === 0 && !thinking && prompts.length > 0 && (
         <Card className="p-6">
           <p className="text-xs font-extrabold text-muted-foreground">{t(d.ai.tryAsking)}</p>
           <div className="mt-4 space-y-2">
@@ -252,7 +301,7 @@ export default function AiPage() {
               <button
                 key={p}
                 type="button"
-                onClick={() => ask(p)}
+                onClick={() => void ask(p)}
                 className="w-full cursor-pointer rounded-xl border border-border p-3.5 text-start text-sm font-semibold text-foreground transition-colors hover:border-accent hover:bg-accent-soft/40"
               >
                 {p}
@@ -279,7 +328,7 @@ export default function AiPage() {
         className="sticky bottom-4 mt-8"
         onSubmit={(e) => {
           e.preventDefault();
-          ask(draft);
+          void ask(draft);
         }}
       >
         <div className="flex items-center gap-2 rounded-2xl border border-border bg-card p-2 shadow-[var(--shadow-raised)]">

@@ -5,7 +5,6 @@ import { useI18n } from "../i18n";
 import { auth } from "../platform/api";
 import { api } from "../platform/remote/endpoints";
 import { useApiQuery } from "../platform/remote/useApi";
-import { respond } from "../platform/ai/assistant";
 import { Button, Card, EmptyState, Input, cx } from "../ui";
 import RequireAuth from "./RequireAuth";
 
@@ -30,6 +29,7 @@ function MessagesInner() {
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Clearing the unread badge is best-effort; a failure must not break the view.
@@ -62,12 +62,21 @@ function MessagesInner() {
   };
 
   /** Draft a reply with the assistant, so the user can edit before sending. */
-  const suggest = () => {
-    if (!activeId) return;
+  const suggest = async () => {
     const lastIncoming = [...messages].reverse().find((m) => m.side !== side);
-    const reply = respond(lastIncoming?.body ?? "");
-    const text = [reply.headline, ...reply.body].map((b) => t(b)).filter(Boolean).join(" ");
-    setDraft(text);
+    const prompt = lastIncoming?.body.trim();
+    if (!activeId || !prompt || suggesting) return;
+    setSuggesting(true);
+    try {
+      const reply = await api.ai.query(prompt);
+      const text = [reply.headline, ...reply.body].map((b) => t(b)).filter(Boolean).join(" ");
+      // Only replace the box when there is something to put in it.
+      if (text) setDraft(text);
+    } catch {
+      // A failed suggestion is not worth interrupting the conversation over.
+    } finally {
+      setSuggesting(false);
+    }
   };
 
   if (threadsQuery.loading && !threads.length) {
@@ -165,11 +174,12 @@ function MessagesInner() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={suggest}
+                    onClick={() => void suggest()}
+                    disabled={suggesting}
                     title={t(d.messages.aiSuggest)}
-                    className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-accent-foreground"
+                    className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-accent-foreground disabled:cursor-default disabled:opacity-60"
                   >
-                    <Sparkles className="h-4.5 w-4.5" />
+                    <Sparkles className={cx("h-4.5 w-4.5", suggesting && "animate-pulse")} />
                   </button>
                   <Input
                     value={draft}
