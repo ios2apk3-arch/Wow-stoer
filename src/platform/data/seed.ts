@@ -18,6 +18,9 @@ import type {
 } from "../types";
 import { archetypes, categories, countries } from "./catalog";
 
+/** Bump whenever the seed shape or content changes, to invalidate stored copies. */
+export const SEED_VERSION = 2;
+
 /** Deterministic PRNG so every visitor sees the same marketplace. */
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -47,7 +50,7 @@ const supplierSeeds = [
     logo: "🏢",
     country: "SA",
     city: "الرياض",
-    cats: ["c-food", "c-grains", "c-canned", "c-oils"],
+    cats: ["c-food", "c-grains", "c-canned", "c-oils", "c-drinks", "c-snacks"],
     rating: 4.8,
     years: 14,
     descAr: "أحد أكبر موزّعي المواد الغذائية الجافة في المملكة، بشبكة مستودعات في خمس مدن وأسطول توصيل خاص.",
@@ -60,7 +63,7 @@ const supplierSeeds = [
     logo: "🥛",
     country: "AE",
     city: "دبي",
-    cats: ["c-dairy", "c-frozen", "c-food"],
+    cats: ["c-dairy", "c-frozen", "c-food", "c-drinks"],
     rating: 4.6,
     years: 9,
     descAr: "متخصصون في الألبان والأجبان المبرّدة مع سلسلة تبريد كاملة معتمدة من هيئة المواصفات.",
@@ -73,7 +76,7 @@ const supplierSeeds = [
     logo: "🌾",
     country: "EG",
     city: "القاهرة",
-    cats: ["c-canned", "c-grains", "c-snacks"],
+    cats: ["c-canned", "c-grains", "c-snacks", "c-oils", "c-food"],
     rating: 4.4,
     years: 21,
     descAr: "مصنع متكامل للمعلبات والمعجونات بطاقة إنتاجية تتجاوز 400 طن شهريًا وتصدير لأكثر من 12 دولة.",
@@ -86,7 +89,7 @@ const supplierSeeds = [
     logo: "📦",
     country: "SA",
     city: "جدة",
-    cats: ["c-pack", "c-pack-paper", "c-pack-plastic", "c-disp"],
+    cats: ["c-pack", "c-pack-paper", "c-pack-plastic", "c-disp", "c-equip"],
     rating: 4.7,
     years: 7,
     descAr: "حلول تغليف مخصصة للمطاعم وتطبيقات التوصيل، مع طباعة شعار العميل وكميات مرنة.",
@@ -99,7 +102,7 @@ const supplierSeeds = [
     logo: "🇹🇷",
     country: "TR",
     city: "إسطنبول",
-    cats: ["c-equip", "c-food", "c-snacks"],
+    cats: ["c-equip", "c-food", "c-snacks", "c-pack", "c-pack-paper"],
     rating: 4.5,
     years: 11,
     descAr: "مورّد تركي لمعدات المطاعم والمخابز مع خدمات التركيب والصيانة في دول الخليج.",
@@ -112,7 +115,7 @@ const supplierSeeds = [
     logo: "🥬",
     country: "SA",
     city: "الدمام",
-    cats: ["c-agri", "c-food"],
+    cats: ["c-agri", "c-food", "c-frozen"],
     rating: 4.3,
     years: 5,
     descAr: "توريد يومي للخضروات والفواكه الطازجة مباشرة من المزارع إلى المطاعم والفنادق.",
@@ -125,7 +128,7 @@ const supplierSeeds = [
     logo: "🧼",
     country: "KW",
     city: "مدينة الكويت",
-    cats: ["c-clean", "c-clean-chem", "c-clean-paper", "c-disp"],
+    cats: ["c-clean", "c-clean-chem", "c-clean-paper", "c-disp", "c-pack-plastic"],
     rating: 4.6,
     years: 12,
     descAr: "منظفات صناعية ومستلزمات نظافة للمنشآت الغذائية، مع برامج تدريب على السلامة.",
@@ -138,7 +141,7 @@ const supplierSeeds = [
     logo: "☕",
     country: "SA",
     city: "الرياض",
-    cats: ["c-drinks", "c-food"],
+    cats: ["c-drinks", "c-food", "c-snacks"],
     rating: 4.9,
     years: 6,
     descAr: "محمصة متخصصة تورّد المقاهي بحبوب قهوة مختصة مع ملفات تحميص حسب الطلب.",
@@ -151,7 +154,7 @@ const supplierSeeds = [
     logo: "🫒",
     country: "MA",
     city: "الدار البيضاء",
-    cats: ["c-oils", "c-agri", "c-food"],
+    cats: ["c-oils", "c-agri", "c-food", "c-canned"],
     rating: 4.2,
     years: 17,
     descAr: "مصدّر مغربي لزيت الزيتون البكر والمنتجات الزراعية المعتمدة عضويًا.",
@@ -164,7 +167,7 @@ const supplierSeeds = [
     logo: "🍽️",
     country: "QA",
     city: "الدوحة",
-    cats: ["c-frozen", "c-food", "c-canned"],
+    cats: ["c-frozen", "c-food", "c-canned", "c-dairy", "c-drinks"],
     rating: 4.5,
     years: 8,
     descAr: "توريد شامل للفنادق وشركات الإعاشة مع خدمة طلبات أسبوعية مجدولة.",
@@ -280,9 +283,14 @@ export function buildSeed(): Database {
   const products: Product[] = [];
   let pid = 0;
   for (const arch of archetypes) {
+    // Every product needs competing sellers, or price comparison is meaningless.
     const matching = suppliers.filter((s) => s.categories.includes(arch.categoryId));
-    const pool = matching.length ? matching : suppliers;
-    const count = Math.min(pool.length, intBetween(2, 3));
+    const pool = [...matching];
+    if (pool.length < 3) {
+      const others = suppliers.filter((s) => !pool.includes(s)).sort(() => rand() - 0.5);
+      pool.push(...others.slice(0, 3 - pool.length));
+    }
+    const count = Math.min(pool.length, intBetween(3, 4));
     const chosen = [...pool].sort(() => rand() - 0.5).slice(0, count);
     for (const sup of chosen) {
       pid += 1;
@@ -655,7 +663,7 @@ export function buildSeed(): Database {
   ];
 
   return {
-    version: 1,
+    version: SEED_VERSION,
     countries,
     categories,
     companies,

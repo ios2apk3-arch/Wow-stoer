@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowLeft, BadgeCheck, Clock3, ShieldCheck, TrendingUp, Truck } from "lucide-react";
 import deliveryTruckSvg from "undraw-svg/delivery-truck.svg?raw";
-import UndrawIllustration from "./UndrawIllustration";
+import UndrawIllustration from "../../components/UndrawIllustration";
 
 const badges = [
   { icon: ShieldCheck, label: "جودة مضمونة 100%" },

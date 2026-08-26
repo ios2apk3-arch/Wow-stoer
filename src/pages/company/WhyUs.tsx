@@ -1,5 +1,5 @@
 import { Clock, HandCoins, PackageCheck, Headset, Truck, Warehouse } from "lucide-react";
-import Reveal from "./Reveal";
+import Reveal from "../../components/Reveal";
 
 const features = [
   { icon: HandCoins, title: "أسعار جملة تنافسية", desc: "أسعار مباشرة من المصدر بدون وسطاء، تمنحك أعلى هامش ربح." },

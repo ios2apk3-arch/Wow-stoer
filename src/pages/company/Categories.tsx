@@ -8,7 +8,7 @@ import {
   Wheat,
   Wine,
 } from "lucide-react";
-import Reveal from "./Reveal";
+import Reveal from "../../components/Reveal";
 
 const categories = [
   { icon: Wheat, title: "المواد الغذائية الجافة", desc: "أرز، بقوليات، دقيق، سكر ومعكرونة" },

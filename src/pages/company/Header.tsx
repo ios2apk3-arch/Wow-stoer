@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, Phone, X } from "lucide-react";
-import { WowMark } from "./icons";
+import { WowMark } from "../../components/icons";
 
 const links = [
   { href: "#home", label: "الرئيسية" },

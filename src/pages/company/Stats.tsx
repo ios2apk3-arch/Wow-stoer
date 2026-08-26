@@ -1,4 +1,4 @@
-import Reveal from "./Reveal";
+import Reveal from "../../components/Reveal";
 
 const stats = [
   { value: "+12", label: "سنة خبرة في السوق" },

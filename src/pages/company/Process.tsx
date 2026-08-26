@@ -1,5 +1,5 @@
 import { ClipboardList, MessageSquareText, PackageSearch, Truck } from "lucide-react";
-import Reveal from "./Reveal";
+import Reveal from "../../components/Reveal";
 
 const steps = [
   { icon: MessageSquareText, title: "تواصل معنا", desc: "أرسل طلبك عبر الهاتف أو واتساب أو النموذج." },

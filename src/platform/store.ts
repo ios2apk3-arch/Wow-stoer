@@ -1,5 +1,5 @@
 import type { Database } from "./types";
-import { buildSeed } from "./data/seed";
+import { SEED_VERSION, buildSeed } from "./data/seed";
 
 const STORAGE_KEY = "waw.smart-commerce.db.v1";
 
@@ -26,7 +26,7 @@ class Store {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw) as Database;
-          if (parsed.version === 1) return parsed;
+          if (parsed.version === SEED_VERSION) return parsed;
         }
       } catch {
         // Corrupt or unreadable storage falls through to a fresh seed.
@@ -46,9 +46,11 @@ class Store {
     }
   }
 
-  getState(): Database {
-    return this.db;
-  }
+  /**
+   * Bound as a field, not a method: `useSyncExternalStore` calls this
+   * detached from the instance, so a prototype method would lose `this`.
+   */
+  getState = (): Database => this.db;
 
   subscribe = (listener: Listener) => {
     this.listeners.add(listener);

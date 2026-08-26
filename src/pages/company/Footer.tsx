@@ -1,5 +1,5 @@
-import { WowMark } from "./icons";
-import { FacebookIcon, InstagramIcon, XIcon } from "./SocialIcons";
+import { WowMark } from "../../components/icons";
+import { FacebookIcon, InstagramIcon, XIcon } from "../../components/SocialIcons";
 
 const columns = [
   {

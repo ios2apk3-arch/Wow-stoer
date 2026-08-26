@@ -1,24 +1,73 @@
 @import "tailwindcss";
 
+/* ============================================================
+   WAW Smart Commerce — design tokens
+   Primitive scale → semantic roles. Components consume the
+   semantic layer only, so a rebrand is a token edit.
+   ============================================================ */
 @theme {
-  --font-sans: "Noto Sans Arabic", "Segoe UI", sans-serif;
+  --font-sans: "Noto Sans Arabic", "Inter", "Segoe UI", system-ui, sans-serif;
 
+  /* Brand ramp */
+  --color-brand-50: #eff8ff;
+  --color-brand-100: #dbeefe;
+  --color-brand-200: #bfe2fe;
+  --color-brand-300: #92d0fd;
+  --color-brand-400: #5fb6fa;
+  --color-brand-500: #3898f0;
+  --color-brand-600: #1d78d8;
+  --color-brand-700: #1a60ae;
+  --color-brand-800: #1b528f;
+  --color-brand-900: #1c4676;
+  --color-brand-950: #142c48;
+
+  /* Ink */
+  --color-ink-50: #f8fafc;
+  --color-ink-100: #f1f5f9;
+  --color-ink-200: #e2e8f0;
+  --color-ink-300: #cbd5e1;
+  --color-ink-400: #94a3b8;
+  --color-ink-500: #64748b;
+  --color-ink-600: #475569;
+  --color-ink-700: #334155;
+  --color-ink-800: #1e293b;
+  --color-ink-900: #0f172a;
+  --color-ink-950: #020617;
+
+  /* Semantic roles */
   --color-primary: #0f172a;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #334155;
-  --color-secondary-foreground: #ffffff;
-  --color-accent: #0369a1;
-  --color-accent-light: #38bdf8;
+  --color-accent: #1d78d8;
+  --color-accent-hover: #1a60ae;
+  --color-accent-soft: #eff8ff;
   --color-accent-foreground: #ffffff;
-  --color-background: #f8fafc;
-  --color-foreground: #020617;
+  --color-background: #f6f8fb;
+  --color-foreground: #0f172a;
   --color-card: #ffffff;
-  --color-card-foreground: #020617;
-  --color-muted: #e8ecf1;
-  --color-muted-foreground: #475569;
+  --color-card-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
   --color-border: #e2e8f0;
-  --color-destructive: #dc2626;
-  --color-ring: #0f172a;
+  --color-border-strong: #cbd5e1;
+  --color-input: #ffffff;
+  --color-ring: #1d78d8;
+
+  /* Status */
+  --color-success: #0f9d58;
+  --color-success-soft: #e7f6ee;
+  --color-warning: #c2760a;
+  --color-warning-soft: #fdf3e2;
+  --color-danger: #d92d20;
+  --color-danger-soft: #fdeceb;
+  --color-info: #1d78d8;
+  --color-info-soft: #eff8ff;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
+  --shadow-raised: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 6px -2px rgb(15 23 42 / 0.05);
+  --shadow-overlay: 0 20px 48px -12px rgb(15 23 42 / 0.24);
+
+  --radius-card: 1rem;
 }
 
 @layer base {
@@ -31,11 +80,35 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   :focus-visible {
-    outline: 3px solid var(--color-accent);
+    outline: 2px solid var(--color-ring);
     outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Numerals and currency read left-to-right even inside Arabic text. */
+  [dir="rtl"] .num {
+    direction: ltr;
+    unicode-bidi: embed;
+    display: inline-block;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-300);
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-400);
+    background-clip: content-box;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -52,10 +125,23 @@
 
 @layer utilities {
   .container-x {
-    @apply mx-auto max-w-7xl px-5 sm:px-8 lg:px-10;
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
   }
 
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* Horizontal rails must scroll inside themselves, never the page. */
+  .rail {
+    @apply flex gap-4 overflow-x-auto pb-2;
+    scrollbar-width: thin;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
   }
 }

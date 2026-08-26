@@ -1,7 +1,7 @@
 import { CheckCircle2 } from "lucide-react";
-import Reveal from "./Reveal";
+import Reveal from "../../components/Reveal";
 import handshakeDealSvg from "undraw-svg/handshake-deal.svg?raw";
-import UndrawIllustration from "./UndrawIllustration";
+import UndrawIllustration from "../../components/UndrawIllustration";
 
 const points = [
   "شراكات مباشرة مع مصانع وموردين معتمدين لضمان أفضل الأسعار",
