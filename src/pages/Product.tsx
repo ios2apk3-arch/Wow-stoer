@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Heart, MessageSquare, Minus, Package, Plus, Timer, TrendingDown, TrendingUp, Truck } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, cart, catalog, favorites, messaging, negotiation } from "../platform/api";
+import { auth, messaging, negotiation } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
+import { useFavorites } from "../platform/remote/useFavorites";
 import { tierFor, tierSavingPct, unitLabel, unitPrice } from "../platform/pricing";
-import { priceSeries } from "../platform/intelligence";
+import { categoryById } from "../platform/data/catalog";
 import { AvailabilityBadge, ProductCard, ProductThumb } from "../components/ProductCard";
 import { VerificationBadge } from "../components/SupplierCard";
 import { Badge, Button, Card, Field, Input, Modal, Rating, Sparkline, Textarea, cx, useToast } from "../ui";
@@ -15,29 +17,73 @@ export default function ProductPage({ id }: { id: string }) {
   const { d, t, n, money, date } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
-  useDatabase();
 
-  const product = catalog.product(id);
-  const [qty, setQty] = useState(product?.moq ?? 1);
+  const { data, loading, error } = useApiQuery((signal) => api.catalog.product(id, signal), [id]);
+  const similarQuery = useApiQuery(
+    (signal) =>
+      api.catalog.products({ category: data?.product.categoryId, perPage: 6 }, signal),
+    [data?.product.categoryId],
+    { enabled: Boolean(data?.product.categoryId) },
+  );
+
+  const [qtyOverride, setQtyOverride] = useState<number | null>(null);
   const [negotiateOpen, setNegotiateOpen] = useState(false);
   const [targetPrice, setTargetPrice] = useState(0);
   const [negotiateMessage, setNegotiateMessage] = useState("");
+  const { isFavorite, toggle: toggleFavorite } = useFavorites();
+  const [addingToCart, setAddingToCart] = useState(false);
 
+  const product = data?.product ?? null;
+  // Default the quantity to the MOQ, but never fight the user once they type.
+  const qty = qtyOverride ?? product?.moq ?? 1;
+  const setQty = (next: number | ((prev: number) => number)) =>
+    setQtyOverride((prev) => {
+      const current = prev ?? product?.moq ?? 1;
+      return Math.max(1, typeof next === "function" ? next(current) : next);
+    });
+
+  const series = useMemo(() => {
+    const points = data?.priceHistory ?? [];
+    if (points.length < 4) return null;
+    const prices = points.map((p) => p.avgPrice);
+    const at = (weeksBack: number) => prices[Math.max(0, prices.length - 1 - weeksBack)];
+    const current = prices[prices.length - 1];
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+    const variance = prices.reduce((a, b) => a + (b - avg) ** 2, 0) / prices.length;
+    const pct = (from: number, to: number) => (from ? Math.round(((to - from) / from) * 1000) / 10 : 0);
+    return {
+      points,
+      current,
+      min: Math.min(...prices),
+      max: Math.max(...prices),
+      changeMonthPct: pct(at(4), current),
+      changeQuarterPct: pct(at(13), current),
+      volatility: Math.round((Math.sqrt(variance) / avg) * 1000) / 10,
+    };
+  }, [data?.priceHistory]);
+
+  if (loading && !product) {
+    return (
+      <div className="container-x py-8">
+        <div className="grid gap-8 lg:grid-cols-[1fr_22rem]">
+          <div className="h-[32rem] animate-pulse rounded-2xl border border-border bg-muted/50" />
+          <div className="h-96 animate-pulse rounded-2xl border border-border bg-muted/50" />
+        </div>
+      </div>
+    );
+  }
+  if (error?.isNotFound || (!loading && !product)) return <NotFound />;
   if (!product) return <NotFound />;
 
-  const supplier = catalog.supplier(product.supplierId);
-  const company = catalog.supplierCompany(product.supplierId);
-  const series = priceSeries(product.id);
+  const company = product.supplier;
+  const supplier = { rating: product.supplier.rating };
   const price = unitPrice(product, qty);
   const activeTier = tierFor(product, qty);
   const saving = tierSavingPct(product, qty);
   const belowMoq = qty < product.moq;
   const user = auth.currentUser();
 
-  const similar = catalog
-    .search({ categoryId: product.categoryId })
-    .filter((p) => p.id !== product.id)
-    .slice(0, 5);
+  const similar = (similarQuery.data?.items ?? []).filter((p) => p.id !== product.id).slice(0, 5);
 
   const openNegotiation = () => {
     const buyerCompany = auth.currentCompany();
@@ -84,7 +130,7 @@ export default function ProductPage({ id }: { id: string }) {
         <Link to="/search" className="hover:text-accent">{t(d.nav.marketplace)}</Link>
         <span>/</span>
         <Link to={`/search?category=${product.categoryId}`} className="hover:text-accent">
-          {t(catalog.categories().find((c) => c.id === product.categoryId)?.name ?? { ar: "", en: "" })}
+          {t(categoryById(product.categoryId)?.name ?? { ar: "", en: "" })}
         </Link>
       </nav>
 
@@ -111,19 +157,17 @@ export default function ProductPage({ id }: { id: string }) {
                 </span>
               </div>
 
-              {company && (
-                <Link
-                  to={`/supplier/${product.supplierId}`}
-                  className="mt-4 flex items-center gap-3 rounded-xl border border-border p-3 transition-colors hover:border-accent"
-                >
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">{company.logo}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-extrabold text-foreground">{t(company.name)}</span>
-                    <span className="block text-[11px] text-muted-foreground">{company.city} · {company.countryCode}</span>
-                  </span>
-                  <VerificationBadge status={company.verification} />
-                </Link>
-              )}
+              <Link
+                to={`/supplier/${product.supplierId}`}
+                className="mt-4 flex items-center gap-3 rounded-xl border border-border p-3 transition-colors hover:border-accent"
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">{company.logo}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-extrabold text-foreground">{t(company.name)}</span>
+                  <span className="num block text-[11px] text-muted-foreground">★ {company.rating.toFixed(1)}</span>
+                </span>
+                <VerificationBadge status={company.verification} />
+              </Link>
 
               <dl className="mt-5 grid grid-cols-2 gap-4">
                 {[
@@ -275,10 +319,17 @@ export default function ProductPage({ id }: { id: string }) {
               <Button
                 fullWidth
                 size="lg"
-                disabled={belowMoq || product.availability === "out_of_stock"}
-                onClick={() => {
-                  cart.add(product.id, qty);
-                  toast.push(t(d.action.addToCart));
+                disabled={belowMoq || product.availability === "out_of_stock" || addingToCart}
+                onClick={async () => {
+                  setAddingToCart(true);
+                  try {
+                    await api.cart.add(product.id, qty);
+                    toast.push(t(d.action.addToCart));
+                  } catch (err) {
+                    toast.push(err instanceof Error ? err.message : t(d.common.signInRequired), "danger");
+                  } finally {
+                    setAddingToCart(false);
+                  }
                 }}
               >
                 {t(d.action.addToCart)}
@@ -305,28 +356,26 @@ export default function ProductPage({ id }: { id: string }) {
                   {t(d.action.message)}
                 </Button>
               </div>
-              <Button variant="ghost" fullWidth onClick={() => favorites.toggle(product.id)}>
-                <Heart className={cx("h-4 w-4", favorites.has(product.id) && "fill-danger text-danger")} />
+              <Button variant="ghost" fullWidth onClick={() => void toggleFavorite(product.id)}>
+                <Heart className={cx("h-4 w-4", isFavorite(product.id) && "fill-danger text-danger")} />
                 {t(d.dashboard.favorites)}
               </Button>
             </div>
 
-            {supplier && (
-              <dl className="mt-5 space-y-2.5 border-t border-border pt-4 text-xs">
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">{t(d.supplier.onTime)}</dt>
-                  <dd className="num font-extrabold text-success">{Math.round(supplier.onTimeRate * 100)}%</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">{t(d.supplier.responseTime)}</dt>
-                  <dd className="num font-extrabold text-foreground">{n(supplier.responseHours)} {t(d.supplier.hours)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">{t(d.supplier.fulfilled)}</dt>
-                  <dd className="num font-extrabold text-foreground">{n(supplier.fulfilledOrders)}</dd>
-                </div>
-              </dl>
-            )}
+            <dl className="mt-5 space-y-2.5 border-t border-border pt-4 text-xs">
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">{t(d.supplier.rating)}</dt>
+                <dd className="num font-extrabold text-foreground">{supplier.rating.toFixed(1)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">{t(d.product.leadTime)}</dt>
+                <dd className="num font-extrabold text-foreground">{n(product.leadTimeDays)} {t(d.product.days)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">{t(d.product.stock)}</dt>
+                <dd className="num font-extrabold text-foreground">{n(product.stock)}</dd>
+              </div>
+            </dl>
           </Card>
         </aside>
       </div>

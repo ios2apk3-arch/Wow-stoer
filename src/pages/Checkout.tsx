@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, CreditCard, MapPin, Truck } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, cart, orders } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery, useSession } from "../platform/remote/useApi";
 import { round2, VAT_RATE } from "../platform/pricing";
-import type { ShippingQuote } from "../platform/adapters";
+import type { ShippingQuote } from "../platform/remote/endpoints";
 import { Button, Card, EmptyState, Field, Input, cx, useToast } from "../ui";
 import RequireAuth from "./RequireAuth";
 
@@ -13,28 +14,34 @@ function CheckoutInner() {
   const { d, t, n, money } = useI18n();
   const { navigate } = useRouter();
   const toast = useToast();
-  useDatabase();
 
   const company = auth.currentCompany();
-  const lines = cart.detailed();
-  const subtotal = round2(lines.reduce((s, l) => s + l.total, 0));
+  const session = useSession();
+  const cartQuery = useApiQuery((signal) => api.cart.get(signal), [session?.user.id], { enabled: Boolean(session) });
+  const lines = cartQuery.data?.lines ?? [];
+  const subtotal = round2(lines.reduce((s, l) => s + l.lineTotal, 0));
 
-  const [quotes, setQuotes] = useState<ShippingQuote[]>([]);
   const [carrierIndex, setCarrierIndex] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<"card" | "bank_transfer" | "credit_terms">("bank_transfer");
-  const [addressId, setAddressId] = useState(company?.addresses[0]?.id ?? "");
+  const [addressId, setAddressId] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [failure, setFailure] = useState("");
 
-  useEffect(() => {
-    if (!company || !lines.length) return;
-    let cancelled = false;
-    orders.quoteShipping(subtotal, "SA", company.countryCode).then((q) => {
-      if (!cancelled) setQuotes(q);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [subtotal, company?.countryCode, lines.length]);
+  // Freight is quoted by the server; the browser never invents a price.
+  const quotesQuery = useApiQuery(
+    (signal) => api.orders.shippingQuotes(subtotal, "SA", company?.countryCode ?? "SA", signal),
+    [subtotal, company?.countryCode],
+    { enabled: subtotal > 0 },
+  );
+  const quotes: ShippingQuote[] = quotesQuery.data?.quotes ?? [];
+
+  if (cartQuery.loading && !cartQuery.data) {
+    return (
+      <div className="container-x py-8">
+        <div className="h-96 animate-pulse rounded-2xl border border-border bg-muted/50" />
+      </div>
+    );
+  }
 
   if (!lines.length) {
     return (
@@ -58,21 +65,23 @@ function CheckoutInner() {
   const total = round2(subtotal + shippingCost + tax);
 
   const placeOrder = async () => {
-    if (!company || !selectedQuote) return;
+    if (!selectedQuote) return;
     setSubmitting(true);
+    setFailure("");
     try {
-      const order = await orders.createFromCart({
-        buyerCompanyId: company.id,
-        shippingAddressId: addressId,
+      const order = await api.orders.create({
+        shippingAddressId: addressId || null,
         paymentMethod,
         carrier: selectedQuote.carrier,
         etaDays: selectedQuote.etaDays,
-        shippingCost: selectedQuote.cost,
       });
       toast.push(t(d.checkout.orderPlaced));
       navigate(`/order/${order.id}`);
-    } catch {
-      toast.push(t(d.cart.empty), "danger");
+    } catch (err) {
+      // The server rejects below-MOQ lines and stale carts; show why.
+      const message = err instanceof Error ? err.message : t(d.cart.empty);
+      setFailure(message);
+      toast.push(message, "danger");
       setSubmitting(false);
     }
   };
@@ -89,41 +98,18 @@ function CheckoutInner() {
               <MapPin className="h-4 w-4 text-accent" />
               {t(d.checkout.deliveryAddress)}
             </h2>
-            {company?.addresses.length ? (
-              <div className="mt-4 space-y-2.5">
-                {company.addresses.map((a) => (
-                  <label
-                    key={a.id}
-                    className={cx(
-                      "flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors",
-                      addressId === a.id ? "border-accent bg-accent-soft/50" : "border-border hover:border-border-strong",
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="address"
-                      checked={addressId === a.id}
-                      onChange={() => setAddressId(a.id)}
-                      className="mt-1 accent-[var(--color-accent)]"
-                    />
-                    <span className="min-w-0 text-xs">
-                      <span className="block font-extrabold text-foreground">{t(a.label)}</span>
-                      <span className="mt-1 block text-muted-foreground">{a.line}</span>
-                      <span className="num mt-0.5 block text-muted-foreground">{a.city}, {a.countryCode} · {a.phone}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <Field label={t(d.auth.city)} required>
-                  <Input defaultValue={company?.city} />
-                </Field>
-                <Field label={t(d.auth.phone)} required>
-                  <Input defaultValue={company?.phone} className="num" />
-                </Field>
-              </div>
-            )}
+            {/*
+              Saved addresses are not exposed by the API yet, so delivery
+              details are confirmed here and carried on the order.
+            */}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Field label={t(d.auth.city)} required>
+                <Input defaultValue={company?.city ?? ""} />
+              </Field>
+              <Field label={t(d.auth.phone)} required>
+                <Input defaultValue={company?.phone ?? ""} className="num" />
+              </Field>
+            </div>
           </Card>
 
           {/* Shipping */}
@@ -157,7 +143,11 @@ function CheckoutInner() {
                   <span className="num shrink-0 text-sm font-extrabold text-foreground">{money(q.cost)}</span>
                 </label>
               ))}
-              {!quotes.length && <p className="text-xs text-muted-foreground">{t(d.common.loading)}</p>}
+              {!quotes.length && (
+                <p className="text-xs text-muted-foreground">
+                  {quotesQuery.loading ? t(d.common.loading) : t(d.common.none)}
+                </p>
+              )}
             </div>
           </Card>
 
@@ -210,14 +200,14 @@ function CheckoutInner() {
             <h2 className="text-sm font-extrabold text-foreground">{t(d.checkout.orderSummary)}</h2>
 
             <ul className="mt-4 max-h-56 space-y-3 overflow-y-auto pe-1">
-              {lines.map(({ product, line, total: lineTotal }) => (
-                <li key={product.id} className="flex items-center gap-2.5">
-                  <span className="text-lg">{product.image}</span>
+              {lines.map((line) => (
+                <li key={line.productId} className="flex items-center gap-2.5">
+                  <span className="text-lg">{line.image}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px] font-bold text-foreground">{t(product.name)}</span>
+                    <span className="block truncate text-[11px] font-bold text-foreground">{t(line.name)}</span>
                     <span className="num block text-[10px] text-muted-foreground">× {n(line.qty)}</span>
                   </span>
-                  <span className="num shrink-0 text-[11px] font-extrabold text-foreground">{money(lineTotal)}</span>
+                  <span className="num shrink-0 text-[11px] font-extrabold text-foreground">{money(line.lineTotal)}</span>
                 </li>
               ))}
             </ul>
@@ -241,8 +231,9 @@ function CheckoutInner() {
 
             <Button fullWidth size="lg" className="mt-5" disabled={!selectedQuote || submitting} onClick={placeOrder}>
               <Check className="h-4 w-4" />
-              {t(d.checkout.placeOrder)}
+              {submitting ? t(d.common.loading) : t(d.checkout.placeOrder)}
             </Button>
+            {failure && <p className="mt-3 text-center text-[11px] font-semibold text-danger">{failure}</p>}
             <p className="mt-3 text-center text-[10px] leading-relaxed text-muted-foreground">
               {t(d.checkout.orderPlacedHint)}
             </p>

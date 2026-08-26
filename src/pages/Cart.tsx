@@ -1,19 +1,64 @@
+import { useState } from "react";
 import { Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { Link, useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { cart, catalog } from "../platform/api";
-import { tierSavingPct, unitLabel } from "../platform/pricing";
-import { ProductThumb } from "../components/ProductCard";
-import { Badge, Button, Card, EmptyState, Input } from "../ui";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery, useSession } from "../platform/remote/useApi";
+import { unitLabel } from "../platform/pricing";
+import { Badge, Button, Card, EmptyState, Input, cx } from "../ui";
+import type { RemoteCart } from "../platform/remote/endpoints";
 
 export default function CartPage() {
   const { d, t, n, money } = useI18n();
   const { navigate } = useRouter();
-  useDatabase();
 
-  const lines = cart.detailed();
-  const totals = cart.totals();
+  const session = useSession();
+  // No point asking the server for a cart we know is unauthenticated.
+  const { data, loading, error, refetch } = useApiQuery(
+    (signal) => api.cart.get(signal),
+    [session?.user.id],
+    { enabled: Boolean(session) },
+  );
+  // Hold the server's answer locally so quantity edits feel immediate.
+  const [override, setOverride] = useState<RemoteCart | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const cartData = override ?? data;
+  const lines = cartData?.lines ?? [];
+  const totals = cartData?.totals ?? { subtotal: 0, shipping: 0, tax: 0, total: 0 };
+
+  /** Every mutation returns the recomputed cart, so the server stays the source of truth. */
+  const mutate = async (action: () => Promise<RemoteCart>) => {
+    setBusy(true);
+    try {
+      setOverride(await action());
+    } catch {
+      refetch();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!session || error?.isAuthError) {
+    return (
+      <div className="container-x py-16">
+        <EmptyState
+          icon={<ShoppingCart className="h-6 w-6" />}
+          title={t(d.common.signInRequired)}
+          hint={t(d.common.signInRequiredHint)}
+          action={<Link to="/login"><Button>{t(d.action.signIn)}</Button></Link>}
+        />
+      </div>
+    );
+  }
+
+  if (loading && !cartData) {
+    return (
+      <div className="container-x py-8">
+        <div className="h-64 animate-pulse rounded-2xl border border-border bg-muted/50" />
+      </div>
+    );
+  }
 
   if (!lines.length) {
     return (
@@ -40,35 +85,32 @@ export default function CartPage() {
       </p>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_20rem]">
-        <div className="space-y-3">
-          {lines.map(({ line, product, price, total }) => {
-            const belowMoq = line.qty < product.moq;
-            const supplier = catalog.supplierCompany(product.supplierId);
-            const saving = tierSavingPct(product, line.qty);
-            const step = Math.max(1, Math.round(product.moq / 4));
+        <div className={cx("space-y-3", busy && "opacity-70")}>
+          {lines.map((line) => {
+            const step = Math.max(1, Math.round(line.moq / 4));
 
             return (
-              <Card key={product.id} className="p-4">
+              <Card key={line.productId} className="p-4">
                 <div className="flex gap-4">
-                  <Link to={`/product/${product.id}`} className="shrink-0">
-                    <ProductThumb product={product} className="h-24 w-24 text-3xl" />
+                  <Link to={`/product/${line.productId}`} className="shrink-0">
+                    <span className="flex h-24 w-24 items-center justify-center rounded-xl bg-muted text-3xl">
+                      {line.image}
+                    </span>
                   </Link>
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <Link to={`/product/${product.id}`} className="line-clamp-2 text-sm font-bold text-foreground hover:text-accent">
-                          {t(product.name)}
+                        <Link to={`/product/${line.productId}`} className="line-clamp-2 text-sm font-bold text-foreground hover:text-accent">
+                          {t(line.name)}
                         </Link>
-                        {supplier && (
-                          <Link to={`/supplier/${product.supplierId}`} className="mt-1 block truncate text-[11px] font-semibold text-muted-foreground hover:text-accent">
-                            {t(supplier.name)}
-                          </Link>
-                        )}
+                        <Link to={`/supplier/${line.supplierId}`} className="mt-1 block truncate text-[11px] font-semibold text-muted-foreground hover:text-accent">
+                          {t(d.nav.suppliers)}
+                        </Link>
                       </div>
                       <button
                         type="button"
-                        onClick={() => cart.remove(product.id)}
+                        onClick={() => void mutate(() => api.cart.remove(line.productId))}
                         aria-label={t(d.action.remove)}
                         className="shrink-0 cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-danger-soft hover:text-danger"
                       >
@@ -80,7 +122,7 @@ export default function CartPage() {
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => cart.setQty(product.id, Math.max(0, line.qty - step))}
+                          onClick={() => void mutate(() => api.cart.setQty(line.productId, Math.max(0, line.qty - step)))}
                           className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-border hover:bg-muted"
                           aria-label="decrease"
                         >
@@ -89,38 +131,37 @@ export default function CartPage() {
                         <Input
                           type="number"
                           min={1}
-                          value={line.qty}
-                          onChange={(e) => cart.setQty(product.id, Math.max(1, Number(e.target.value) || 1))}
+                          defaultValue={line.qty}
+                          key={`${line.productId}-${line.qty}`}
+                          onBlur={(e) => {
+                            const next = Math.max(1, Number(e.target.value) || 1);
+                            if (next !== line.qty) void mutate(() => api.cart.setQty(line.productId, next));
+                          }}
                           className="num h-9 w-20 text-center text-xs font-extrabold"
                         />
                         <button
                           type="button"
-                          onClick={() => cart.setQty(product.id, line.qty + step)}
+                          onClick={() => void mutate(() => api.cart.setQty(line.productId, line.qty + step))}
                           className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-border hover:bg-muted"
                           aria-label="increase"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
-                        <span className="ms-1 text-[11px] text-muted-foreground">{unitLabel(product.unit, "en")}</span>
+                        <span className="ms-1 text-[11px] text-muted-foreground">{unitLabel(line.unit, "en")}</span>
                       </div>
 
                       <div className="text-end">
-                        <div className="num text-base font-extrabold text-foreground">{money(total)}</div>
+                        <div className="num text-base font-extrabold text-foreground">{money(line.lineTotal)}</div>
                         <div className="num text-[11px] text-muted-foreground">
-                          {money(price)} {t(d.common.perUnit)}
+                          {money(line.unitPrice)} {t(d.common.perUnit)}
                         </div>
                       </div>
                     </div>
 
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {belowMoq && (
+                      {line.belowMoq && (
                         <Badge tone="danger">
-                          {t(d.cart.belowMoq)} <span className="num">{n(product.moq)}</span>
-                        </Badge>
-                      )}
-                      {saving > 0 && (
-                        <Badge tone="success">
-                          {t(d.product.youSave)} <span className="num">{n(saving)}%</span>
+                          {t(d.cart.belowMoq)} <span className="num">{n(line.moq)}</span>
                         </Badge>
                       )}
                     </div>
@@ -134,7 +175,7 @@ export default function CartPage() {
             <Link to="/search">
               <Button variant="ghost">{t(d.action.continueShopping)}</Button>
             </Link>
-            <Button variant="ghost" onClick={() => cart.clear()}>
+            <Button variant="ghost" onClick={() => void mutate(() => api.cart.clear())}>
               {t(d.action.clear)}
             </Button>
           </div>
@@ -160,9 +201,18 @@ export default function CartPage() {
               </div>
             </dl>
 
-            <Button fullWidth size="lg" className="mt-5" onClick={() => navigate("/checkout")}>
+            <Button
+              fullWidth
+              size="lg"
+              className="mt-5"
+              disabled={busy || lines.some((l) => l.belowMoq)}
+              onClick={() => navigate("/checkout")}
+            >
               {t(d.action.checkout)}
             </Button>
+            {lines.some((l) => l.belowMoq) && (
+              <p className="mt-2 text-center text-[11px] font-semibold text-danger">{t(d.cart.belowMoq)}</p>
+            )}
           </Card>
         </aside>
       </div>

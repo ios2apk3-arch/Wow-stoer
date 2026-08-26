@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Package } from "lucide-react";
 import { Link } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, orders } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { OrderStatusBadge, PaymentStatusBadge } from "../components/StatusBadge";
 import { Button, Card, EmptyState, Select } from "../ui";
 import RequireAuth from "./RequireAuth";
@@ -13,28 +13,24 @@ const statuses: (OrderStatus | "all")[] = ["all", "pending", "confirmed", "proce
 
 function OrdersInner() {
   const { d, t, n, money, date } = useI18n();
-  useDatabase();
   const [filter, setFilter] = useState<OrderStatus | "all">("all");
 
-  const user = auth.currentUser();
-  const company = auth.currentCompany();
-
-  const list = user?.role === "supplier" && company
-    ? orders.forSupplier(company.id.replace("co-", ""))
-    : user?.role === "admin"
-      ? orders.all()
-      : company
-        ? orders.forBuyer(company.id)
-        : [];
-
-  const filtered = filter === "all" ? list : list.filter((o) => o.status === filter);
+  // The server already scopes this to the caller: buyers see their own
+  // orders, suppliers only those containing one of their lines.
+  const { data, loading } = useApiQuery(
+    (signal) => api.orders.list({ status: filter === "all" ? undefined : filter, perPage: 50 }, signal),
+    [filter],
+  );
+  const filtered = data?.items ?? [];
 
   return (
     <div className="container-x py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold text-foreground">{t(d.nav.orders)}</h1>
-          <p className="num mt-1 text-sm text-muted-foreground">{n(filtered.length)}</p>
+          <p className="num mt-1 text-sm text-muted-foreground">
+          {loading ? t(d.common.loading) : n(data?.total ?? 0)}
+        </p>
         </div>
         <Select value={filter} onChange={(e) => setFilter(e.target.value as OrderStatus | "all")} className="h-9 w-auto text-xs">
           {statuses.map((s) => (
@@ -45,7 +41,13 @@ function OrdersInner() {
         </Select>
       </div>
 
-      {filtered.length === 0 ? (
+      {loading && !filtered.length ? (
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-muted/50" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={<Package className="h-6 w-6" />}
           title={t(d.order.noOrders)}
@@ -71,14 +73,11 @@ function OrdersInner() {
                       {date(o.createdAt)} · <span className="num">{n(o.lines.length)}</span> {t(d.order.items)}
                     </p>
                     <div className="mt-3 flex items-center gap-1.5">
-                      {o.lines.slice(0, 5).map((l, i) => {
-                        const emoji = l.productName.en.slice(0, 1);
-                        return (
-                          <span key={i} className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-xs font-bold text-muted-foreground">
-                            {emoji}
-                          </span>
-                        );
-                      })}
+                      {o.lines.slice(0, 5).map((l, i) => (
+                        <span key={i} className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-xs font-bold text-muted-foreground">
+                          {l.name.en.slice(0, 1)}
+                        </span>
+                      ))}
                       {o.lines.length > 5 && <span className="num text-[11px] text-muted-foreground">+{o.lines.length - 5}</span>}
                     </div>
                   </div>

@@ -1,23 +1,32 @@
 import type { Order, PriceTier, Product, Unit } from "./types";
 import { fxToSar } from "./data/catalog";
 
-/** The tier that applies at a given quantity — the wholesale ladder rule. */
-export function tierFor(product: Product, qty: number): PriceTier {
-  const applicable = [...product.tiers].sort((a, b) => a.minQty - b.minQty).filter((t) => qty >= t.minQty);
-  return applicable.length ? applicable[applicable.length - 1] : product.tiers[0];
+/**
+ * Pricing depends only on the ladder, so these take anything carrying tiers —
+ * a locally seeded product or one from the API.
+ */
+export interface Priced {
+  tiers: PriceTier[];
 }
 
-export function unitPrice(product: Product, qty: number): number {
+/** The tier that applies at a given quantity — the wholesale ladder rule. */
+export function tierFor(product: Priced, qty: number): PriceTier {
+  const sorted = [...product.tiers].sort((a, b) => a.minQty - b.minQty);
+  const applicable = sorted.filter((t) => qty >= t.minQty);
+  return applicable.length ? applicable[applicable.length - 1] : sorted[0];
+}
+
+export function unitPrice(product: Priced, qty: number): number {
   return tierFor(product, qty).price;
 }
 
-export function lineTotal(product: Product, qty: number): number {
+export function lineTotal(product: Priced, qty: number): number {
   return round2(unitPrice(product, qty) * qty);
 }
 
 /** Saving versus buying the same quantity at the entry-tier price. */
-export function tierSavingPct(product: Product, qty: number): number {
-  const base = product.tiers[0].price;
+export function tierSavingPct(product: Priced, qty: number): number {
+  const base = [...product.tiers].sort((a, b) => a.minQty - b.minQty)[0]?.price ?? 0;
   const now = unitPrice(product, qty);
   if (base === 0) return 0;
   return Math.max(0, Math.round(((base - now) / base) * 1000) / 10);

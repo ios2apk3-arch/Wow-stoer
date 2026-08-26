@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
 import { useRouter } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { catalog, type ProductFilters } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { countries, mainCategories, subCategories } from "../platform/data/catalog";
+import { categoryById } from "../platform/data/catalog";
 import { ProductCard } from "../components/ProductCard";
 import { Button, Card, Checkbox, EmptyState, Input, Select, cx } from "../ui";
 import type { Availability } from "../platform/types";
@@ -13,14 +14,13 @@ const sortKeys = ["relevance", "price_asc", "price_desc", "rating", "popular", "
 const availabilities: Availability[] = ["in_stock", "low_stock", "made_to_order", "out_of_stock"];
 
 export default function SearchPage() {
-  const { d, t, n, money } = useI18n();
+  const { d, t, n } = useI18n();
   const { query, setQuery } = useRouter();
-  useDatabase();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const q = query.get("q") ?? "";
   const categoryId = query.get("category") ?? "";
-  const sort = (query.get("sort") ?? "relevance") as ProductFilters["sort"];
+  const sort = (query.get("sort") ?? "relevance") as (typeof sortKeys)[number];
   const minPrice = query.get("min");
   const maxPrice = query.get("max");
   const maxMoq = query.get("moq");
@@ -28,37 +28,47 @@ export default function SearchPage() {
   const selectedCountries = (query.get("countries") ?? "").split(",").filter(Boolean);
   const selectedAvailability = (query.get("avail") ?? "").split(",").filter(Boolean);
 
-  const results = useMemo(
-    () =>
-      catalog.search({
-        query: q || undefined,
-        categoryId: categoryId || undefined,
-        sort,
-        minPrice: minPrice ? Number(minPrice) : undefined,
-        maxPrice: maxPrice ? Number(maxPrice) : undefined,
-        maxMoq: maxMoq ? Number(maxMoq) : undefined,
-        minRating: minRating ? Number(minRating) : undefined,
-        countries: selectedCountries.length ? selectedCountries : undefined,
-        availability: selectedAvailability.length ? selectedAvailability : undefined,
-      }),
-    [q, categoryId, sort, minPrice, maxPrice, maxMoq, minRating, query],
+  const page = Number(query.get("page") ?? "1") || 1;
+  const perPage = 24;
+
+  // Filtering, sorting and paging all happen in the database, so the browser
+  // never downloads the whole catalogue to slice it locally.
+  const { data, loading, error } = useApiQuery(
+    (signal) =>
+      api.catalog.products(
+        {
+          q: q || undefined,
+          category: categoryId || undefined,
+          sort,
+          page,
+          perPage,
+          minPrice: minPrice ? Number(minPrice) : undefined,
+          maxPrice: maxPrice ? Number(maxPrice) : undefined,
+          maxMoq: maxMoq ? Number(maxMoq) : undefined,
+          minRating: minRating ? Number(minRating) : undefined,
+          countries: selectedCountries.join(",") || undefined,
+          availability: selectedAvailability.join(",") || undefined,
+        },
+        signal,
+      ),
+    [q, categoryId, sort, page, minPrice, maxPrice, maxMoq, minRating, selectedCountries.join(","), selectedAvailability.join(",")],
   );
+
+  const results = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const pages = data?.pages ?? 1;
 
   const toggleInList = (key: string, current: string[], value: string) => {
     const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
-    setQuery({ [key]: next.join(",") || null });
+    setQuery({ [key]: next.join(",") || null, page: null });
   };
 
   const activeCount =
     (categoryId ? 1 : 0) + (minPrice ? 1 : 0) + (maxPrice ? 1 : 0) + (maxMoq ? 1 : 0) +
     (minRating ? 1 : 0) + selectedCountries.length + selectedAvailability.length;
 
-  const parentCategory = categoryId
-    ? catalog.categories().find((c) => c.id === categoryId)
-    : null;
-  const activeParent = parentCategory?.parentId
-    ? catalog.categories().find((c) => c.id === parentCategory.parentId)
-    : parentCategory;
+  const parentCategory = categoryId ? categoryById(categoryId) ?? null : null;
+  const activeParent = parentCategory?.parentId ? categoryById(parentCategory.parentId) ?? null : parentCategory;
 
   const Filters = (
     <div className="space-y-6">
@@ -67,7 +77,7 @@ export default function SearchPage() {
         <div className="space-y-0.5">
           <button
             type="button"
-            onClick={() => setQuery({ category: null })}
+            onClick={() => setQuery({ category: null, page: null })}
             className={cx(
               "w-full cursor-pointer rounded-lg px-3 py-2 text-start text-xs font-bold transition-colors",
               !categoryId ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-muted",
@@ -83,7 +93,7 @@ export default function SearchPage() {
               <div key={cat.id}>
                 <button
                   type="button"
-                  onClick={() => setQuery({ category: isActive ? null : cat.id })}
+                  onClick={() => setQuery({ category: isActive ? null : cat.id, page: null })}
                   className={cx(
                     "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-start text-xs font-bold transition-colors",
                     isActive ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-muted",
@@ -98,7 +108,7 @@ export default function SearchPage() {
                       <button
                         key={sub.id}
                         type="button"
-                        onClick={() => setQuery({ category: categoryId === sub.id ? cat.id : sub.id })}
+                        onClick={() => setQuery({ category: categoryId === sub.id ? cat.id : sub.id, page: null })}
                         className={cx(
                           "w-full cursor-pointer rounded-lg px-2.5 py-1.5 text-start text-[11px] font-semibold transition-colors",
                           categoryId === sub.id ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-muted",
@@ -124,7 +134,7 @@ export default function SearchPage() {
             inputMode="numeric"
             placeholder={t(d.common.from)}
             defaultValue={minPrice ?? ""}
-            onBlur={(e) => setQuery({ min: e.target.value || null })}
+            onBlur={(e) => setQuery({ min: e.target.value || null, page: null })}
             className="h-10 text-xs"
           />
           <span className="text-muted-foreground">—</span>
@@ -134,7 +144,7 @@ export default function SearchPage() {
             inputMode="numeric"
             placeholder={t(d.common.to)}
             defaultValue={maxPrice ?? ""}
-            onBlur={(e) => setQuery({ max: e.target.value || null })}
+            onBlur={(e) => setQuery({ max: e.target.value || null, page: null })}
             className="h-10 text-xs"
           />
         </div>
@@ -148,7 +158,7 @@ export default function SearchPage() {
           inputMode="numeric"
           placeholder="—"
           defaultValue={maxMoq ?? ""}
-          onBlur={(e) => setQuery({ moq: e.target.value || null })}
+          onBlur={(e) => setQuery({ moq: e.target.value || null, page: null })}
           className="h-10 text-xs"
         />
       </div>
@@ -160,7 +170,7 @@ export default function SearchPage() {
             <button
               key={r}
               type="button"
-              onClick={() => setQuery({ rating: minRating === String(r) ? null : String(r) })}
+              onClick={() => setQuery({ rating: minRating === String(r) ? null : String(r), page: null })}
               className={cx(
                 "num cursor-pointer rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors",
                 minRating === String(r) ? "border-accent bg-accent-soft text-accent" : "border-border text-muted-foreground hover:border-border-strong",
@@ -203,7 +213,7 @@ export default function SearchPage() {
           variant="outline"
           fullWidth
           size="sm"
-          onClick={() => setQuery({ category: null, min: null, max: null, moq: null, rating: null, countries: null, avail: null })}
+          onClick={() => setQuery({ category: null, min: null, max: null, moq: null, rating: null, countries: null, avail: null, page: null })}
         >
           {t(d.action.reset)}
         </Button>
@@ -219,7 +229,7 @@ export default function SearchPage() {
             {q ? `"${q}"` : parentCategory ? t(parentCategory.name) : t(d.nav.marketplace)}
           </h1>
           <p className="num mt-1 text-sm text-muted-foreground">
-            {n(results.length)} {t(d.search.results)}
+            {loading ? t(d.common.loading) : `${n(total)} ${t(d.search.results)}`}
           </p>
         </div>
 
@@ -231,7 +241,7 @@ export default function SearchPage() {
           </Button>
           <Select
             value={sort}
-            onChange={(e) => setQuery({ sort: e.target.value === "relevance" ? null : e.target.value })}
+            onChange={(e) => setQuery({ sort: e.target.value === "relevance" ? null : e.target.value, page: null })}
             className="h-9 w-auto text-xs"
             aria-label={t(d.search.sortBy)}
           >
@@ -250,23 +260,61 @@ export default function SearchPage() {
         </aside>
 
         <div>
-          {results.length === 0 ? (
+          {error ? (
+            <EmptyState
+              icon={<X className="h-6 w-6" />}
+              title={error.message}
+              hint={t({ ar: "تعذّر الوصول إلى الخادم. تأكد من تشغيله ثم أعد المحاولة.", en: "Could not reach the server. Check it is running and try again." })}
+            />
+          ) : loading && !results.length ? (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-80 animate-pulse rounded-2xl border border-border bg-muted/50" />
+              ))}
+            </div>
+          ) : results.length === 0 ? (
             <EmptyState
               icon={<X className="h-6 w-6" />}
               title={t(d.search.noResults)}
               hint={t(d.search.noResultsHint)}
               action={
-                <Button variant="outline" onClick={() => setQuery({ q: null, category: null, min: null, max: null, moq: null, rating: null, countries: null, avail: null })}>
+                <Button variant="outline" onClick={() => setQuery({ q: null, category: null, min: null, max: null, moq: null, rating: null, countries: null, avail: null, page: null })}>
                   {t(d.action.reset)}
                 </Button>
               }
             />
           ) : (
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-              {results.map((p) => (
-                <ProductCard key={p.id} product={p} />
-              ))}
-            </div>
+            <>
+              <div className={cx("grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4", loading && "opacity-60")}>
+                {results.map((p) => (
+                  <ProductCard key={p.id} product={p} />
+                ))}
+              </div>
+
+              {pages > 1 && (
+                <nav className="mt-8 flex items-center justify-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => setQuery({ page: page > 2 ? String(page - 1) : null })}
+                  >
+                    {t(d.action.back)}
+                  </Button>
+                  <span className="num px-3 text-xs font-bold text-muted-foreground">
+                    {n(page)} / {n(pages)}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= pages}
+                    onClick={() => setQuery({ page: String(page + 1) })}
+                  >
+                    {t(d.action.viewAll)}
+                  </Button>
+                </nav>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -283,7 +331,7 @@ export default function SearchPage() {
             </div>
             {Filters}
             <Button fullWidth className="mt-6" onClick={() => setDrawerOpen(false)}>
-              {t(d.action.apply)} ({n(results.length)})
+              {t(d.action.apply)} ({n(total)})
             </Button>
           </div>
         </div>

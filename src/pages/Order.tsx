@@ -1,8 +1,10 @@
-import { Check, CreditCard, Download, Package, Truck, X } from "lucide-react";
+import { Check, CreditCard, Download, Truck, X } from "lucide-react";
+import { useState } from "react";
 import { Link } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { auth, cart, catalog, orders } from "../platform/api";
+import { auth } from "../platform/api";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { OrderStatusBadge, PaymentStatusBadge } from "../components/StatusBadge";
 import { Button, Card, cx, useToast } from "../ui";
 import NotFound from "./NotFound";
@@ -14,20 +16,50 @@ const flow: OrderStatus[] = ["pending", "confirmed", "processing", "shipped", "d
 function OrderInner({ id }: { id: string }) {
   const { d, t, n, money, date } = useI18n();
   const toast = useToast();
-  useDatabase();
+  const [busy, setBusy] = useState(false);
 
-  const order = orders.get(id);
+  const { data: order, loading, error, refetch } = useApiQuery((signal) => api.orders.get(id, signal), [id]);
   const user = auth.currentUser();
-  if (!order) return <NotFound />;
 
-  const company = catalog.supplierCompany(order.lines[0]?.supplierId ?? "");
+  if (loading && !order) {
+    return (
+      <div className="container-x py-8">
+        <div className="h-96 animate-pulse rounded-2xl border border-border bg-muted/50" />
+      </div>
+    );
+  }
+  if (error?.isNotFound || error?.isForbidden || !order) return <NotFound />;
+
   const canFulfil = user?.role === "supplier" || user?.role === "admin";
-  const stageIndex = flow.indexOf(order.status);
+  const stageIndex = flow.indexOf(order.status as OrderStatus);
   const cancelled = order.status === "cancelled";
 
-  const reorder = () => {
-    for (const line of order.lines) cart.add(line.productId, line.qty);
-    toast.push(t(d.action.reorder));
+  /** Re-add every line to the cart; the server reprices each one. */
+  const reorder = async () => {
+    setBusy(true);
+    try {
+      for (const line of order.lines) {
+        if (line.productId) await api.cart.add(line.productId, line.qty);
+      }
+      toast.push(t(d.action.reorder));
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : t(d.common.signInRequired), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runAction = async (action: () => Promise<unknown>, label: string) => {
+    setBusy(true);
+    try {
+      await action();
+      refetch();
+      toast.push(label);
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : label, "danger");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -46,14 +78,16 @@ function OrderInner({ id }: { id: string }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2.5">
-          <Button variant="outline" size="sm" onClick={reorder}>{t(d.action.reorder)}</Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => void reorder()}>
+            {t(d.action.reorder)}
+          </Button>
           {canFulfil && !cancelled && order.status !== "delivered" && (
-            <Button size="sm" onClick={() => { orders.advance(order.id); toast.push(t(d.action.advance)); }}>
+            <Button size="sm" disabled={busy} onClick={() => void runAction(() => api.orders.advance(order.id), t(d.action.advance))}>
               {t(d.action.advance)}
             </Button>
           )}
           {!cancelled && ["pending", "confirmed"].includes(order.status) && (
-            <Button variant="ghost" size="sm" onClick={() => { orders.cancel(order.id); toast.push(t(d.order.statuses.cancelled)); }}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => void runAction(() => api.orders.cancel(order.id), t(d.order.statuses.cancelled))}>
               {t(d.action.cancel)}
             </Button>
           )}
@@ -70,14 +104,14 @@ function OrderInner({ id }: { id: string }) {
                 <X className="h-5 w-5 text-danger" />
                 <div>
                   <div className="text-sm font-extrabold text-danger">{t(d.order.statuses.cancelled)}</div>
-                  <div className="text-[11px] text-muted-foreground">{date(order.timeline[order.timeline.length - 1].at)}</div>
+                  <div className="text-[11px] text-muted-foreground">{date((order.timeline?.[order.timeline.length - 1]?.at ?? order.createdAt))}</div>
                 </div>
               </div>
             ) : (
               <ol className="mt-6 flex items-start justify-between gap-1">
                 {flow.map((stage, i) => {
                   const done = i <= stageIndex;
-                  const event = order.timeline.find((e) => e.status === stage);
+                  const event = order.timeline?.find((e) => e.status === stage);
                   return (
                     <li key={stage} className="relative flex flex-1 flex-col items-center text-center">
                       {i > 0 && (
@@ -115,11 +149,11 @@ function OrderInner({ id }: { id: string }) {
               {order.lines.map((line, i) => (
                 <li key={i} className="flex items-center gap-4 py-3.5 first:pt-0 last:pb-0">
                   <Link to={`/product/${line.productId}`} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-xl">
-                    {catalog.product(line.productId)?.image ?? "📦"}
+                    📦
                   </Link>
                   <div className="min-w-0 flex-1">
                     <Link to={`/product/${line.productId}`} className="line-clamp-1 text-sm font-bold text-foreground hover:text-accent">
-                      {t(line.productName)}
+                      {t(line.name)}
                     </Link>
                     <p className="num mt-0.5 text-[11px] text-muted-foreground">
                       {n(line.qty)} {line.unit} × {money(line.unitPrice, order.currency)}
@@ -201,21 +235,6 @@ function OrderInner({ id }: { id: string }) {
             </div>
           </Card>
 
-          {company && (
-            <Card className="p-5">
-              <h2 className="flex items-center gap-2 text-sm font-extrabold text-foreground">
-                <Package className="h-4 w-4 text-accent" />
-                {t(d.nav.suppliers)}
-              </h2>
-              <Link to={`/supplier/${order.lines[0].supplierId}`} className="mt-3 flex items-center gap-3 hover:opacity-80">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">{company.logo}</span>
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-extrabold text-foreground">{t(company.name)}</span>
-                  <span className="block text-[11px] text-muted-foreground">{company.city}</span>
-                </span>
-              </Link>
-            </Card>
-          )}
         </aside>
       </div>
     </div>
