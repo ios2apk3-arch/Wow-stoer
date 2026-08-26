@@ -1,12 +1,9 @@
 import { useState } from "react";
 import { Check, FileText, Package, ShieldCheck, Users, Wallet, X } from "lucide-react";
 import { Link } from "../../app/router";
-import { useDatabase } from "../../app/usePlatform";
 import { useI18n } from "../../i18n";
-import { admin, catalog, orders } from "../../platform/api";
-import { categoryIndices, regionDemand } from "../../platform/intelligence";
-import { store } from "../../platform/store";
-import { countries } from "../../platform/data/catalog";
+import { api } from "../../platform/remote/endpoints";
+import { useApiQuery } from "../../platform/remote/useApi";
 import { BarList } from "../../components/LineChart";
 import { OrderStatusBadge } from "../../components/StatusBadge";
 import { VerificationBadge } from "../../components/SupplierCard";
@@ -16,18 +13,23 @@ import RequireAuth from "../RequireAuth";
 function AdminInner() {
   const { d, t, n, money, date, relative } = useI18n();
   const toast = useToast();
-  useDatabase();
-
-  const stats = admin.stats();
-  const companies = admin.companies();
-  const users = admin.users();
-  const audit = admin.audit();
-  const regions = regionDemand();
-  const indices = categoryIndices();
   const [tab, setTab] = useState("overview");
 
-  const pending = companies.filter((c) => c.verification === "pending");
-  const recentOrders = orders.all().slice(0, 10);
+  const statsQuery = useApiQuery((signal) => api.admin.stats(signal), []);
+  const companiesQuery = useApiQuery((signal) => api.admin.companies({ perPage: 60 }, signal), []);
+  const pendingQuery = useApiQuery((signal) => api.admin.companies({ verification: "pending", perPage: 30 }, signal), []);
+  const auditQuery = useApiQuery((signal) => api.admin.audit({ perPage: 40 }, signal), []);
+  const regionsQuery = useApiQuery((signal) => api.intelligence.regions(signal), []);
+  const indicesQuery = useApiQuery((signal) => api.intelligence.categories(signal), []);
+  const ordersQuery = useApiQuery((signal) => api.orders.list({ perPage: 10 }, signal), []);
+
+  const stats = statsQuery.data;
+  const companies = companiesQuery.data?.items ?? [];
+  const pending = pendingQuery.data?.items ?? [];
+  const audit = auditQuery.data?.items ?? [];
+  const regions = regionsQuery.data?.regions ?? [];
+  const indices = indicesQuery.data?.categories ?? [];
+  const recentOrders = ordersQuery.data?.items ?? [];
 
   return (
     <div className="container-x py-8">
@@ -36,37 +38,30 @@ function AdminInner() {
           <h1 className="text-2xl font-extrabold text-foreground">{t(d.dashboard.admin)}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t(d.dashboard.platformActivity)}</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            store.clear();
-            toast.push(t(d.action.resetDemoData));
-          }}
-        >
-          {t(d.action.resetDemoData)}
+        <Button variant="outline" size="sm" onClick={() => { statsQuery.refetch(); companiesQuery.refetch(); auditQuery.refetch(); }}>
+          {t(d.action.viewAll)}
         </Button>
       </header>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t(d.dashboard.gmv)} value={<span className="num">{money(stats.gmv)}</span>} icon={<Wallet className="h-5 w-5" />} tone="success" />
-        <Stat label={t(d.dashboard.orderCount)} value={<span className="num">{n(stats.orders)}</span>} icon={<Package className="h-5 w-5" />} tone="accent" />
-        <Stat label={t(d.auth.roles.buyer)} value={<span className="num">{n(users.length)}</span>} icon={<Users className="h-5 w-5" />} tone="info" />
-        <Stat label={t(d.dashboard.pendingVerification)} value={<span className="num">{n(stats.pendingVerification)}</span>} icon={<ShieldCheck className="h-5 w-5" />} tone="warning" />
+        <Stat label={t(d.dashboard.gmv)} value={<span className="num">{money(stats?.gmv ?? 0)}</span>} icon={<Wallet className="h-5 w-5" />} tone="success" />
+        <Stat label={t(d.dashboard.orderCount)} value={<span className="num">{n(stats?.orders ?? 0)}</span>} icon={<Package className="h-5 w-5" />} tone="accent" />
+        <Stat label={t(d.auth.roles.buyer)} value={<span className="num">{n(stats?.users ?? 0)}</span>} icon={<Users className="h-5 w-5" />} tone="info" />
+        <Stat label={t(d.dashboard.pendingVerification)} value={<span className="num">{n(stats?.pendingVerification ?? 0)}</span>} icon={<ShieldCheck className="h-5 w-5" />} tone="warning" />
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t(d.supplier.products)} value={<span className="num">{n(stats.products)}</span>} />
-        <Stat label={t(d.nav.suppliers)} value={<span className="num">{n(stats.suppliers)}</span>} />
-        <Stat label={t(d.nav.rfq)} value={<span className="num">{n(stats.openRfqs)}</span>} />
-        <Stat label={t(d.nav.negotiations)} value={<span className="num">{n(stats.activeNegotiations)}</span>} />
+        <Stat label={t(d.supplier.products)} value={<span className="num">{n(stats?.products ?? 0)}</span>} />
+        <Stat label={t(d.nav.suppliers)} value={<span className="num">{n(stats?.suppliers ?? 0)}</span>} />
+        <Stat label={t(d.nav.rfq)} value={<span className="num">{n(stats?.openRfqs ?? 0)}</span>} />
+        <Stat label={t(d.nav.negotiations)} value={<span className="num">{n(stats?.activeNegotiations ?? 0)}</span>} />
       </div>
 
       <Tabs value={tab} onChange={setTab}>
         <TabList>
           <Tab id="overview">{t(d.dashboard.platformActivity)}</Tab>
           <Tab id="verification">{t(d.dashboard.verification)} ({n(pending.length)})</Tab>
-          <Tab id="companies">{t(d.profile.companyInfo)} ({n(companies.length)})</Tab>
+          <Tab id="companies">{t(d.profile.companyInfo)} ({n(companiesQuery.data?.total ?? 0)})</Tab>
           <Tab id="audit">{t(d.dashboard.auditLog)}</Tab>
         </TabList>
 
@@ -104,7 +99,7 @@ function AdminInner() {
                   <div className="p-5">
                     <BarList
                       items={regions.map((r) => ({
-                        label: t(countries.find((c) => c.code === r.countryCode)?.name ?? { ar: r.countryCode, en: r.countryCode }),
+                        label: t(r.name),
                         value: r.value,
                         hint: `${n(r.orderCount)} ${t(d.nav.orders)}`,
                       }))}
@@ -118,7 +113,7 @@ function AdminInner() {
                   <div className="p-5">
                     <BarList
                       items={indices.map((i) => ({
-                        label: `${i.category.icon} ${t(i.category.name)}`,
+                        label: `${i.icon} ${t(i.name)}`,
                         value: i.demandIndex,
                         hint: `${n(i.productCount)} ${t(d.supplier.products)} · ${i.changeMonthPct >= 0 ? "+" : ""}${n(i.changeMonthPct)}%`,
                       }))}
@@ -151,8 +146,12 @@ function AdminInner() {
                           <Button
                             size="sm"
                             variant="success"
-                            onClick={() => {
-                              admin.setVerification(c.id, "verified");
+                            onClick={async () => {
+                              await api.admin.setVerification(c.id, "verified");
+                              pendingQuery.refetch();
+                              companiesQuery.refetch();
+                              statsQuery.refetch();
+                              auditQuery.refetch();
                               toast.push(t(d.supplier.verified));
                             }}
                           >
@@ -162,8 +161,11 @@ function AdminInner() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => {
-                              admin.setVerification(c.id, "rejected");
+                            onClick={async () => {
+                              await api.admin.setVerification(c.id, "rejected");
+                              pendingQuery.refetch();
+                              companiesQuery.refetch();
+                              statsQuery.refetch();
                               toast.push(t(d.supplier.rejected), "warning");
                             }}
                           >
@@ -195,7 +197,7 @@ function AdminInner() {
                   </thead>
                   <tbody>
                     {companies.map((c) => {
-                      const isSupplier = catalog.supplier(c.id.replace("co-", "")) !== null;
+                      const isSupplier = c.isSupplier;
                       return (
                         <tr key={c.id} className="border-b border-border/60 last:border-0">
                           <td className="py-3">
@@ -214,7 +216,7 @@ function AdminInner() {
                           <td className="num py-3 text-muted-foreground">{date(c.memberSince, { month: "short", year: "numeric" })}</td>
                           <td className="py-3">
                             {isSupplier && (
-                              <Link to={`/supplier/${c.id.replace("co-", "")}`}>
+                              <Link to={`/supplier/${c.id}`}>
                                 <Button size="sm" variant="ghost">{t(d.action.view)}</Button>
                               </Link>
                             )}

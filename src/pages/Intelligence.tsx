@@ -1,34 +1,40 @@
 import { useState } from "react";
 import { Activity, Globe2, TrendingDown, TrendingUp, Trophy } from "lucide-react";
 import { Link } from "../app/router";
-import { useDatabase } from "../app/usePlatform";
 import { useI18n } from "../i18n";
-import { catalog } from "../platform/api";
-import {
-  categoryIndices,
-  priceAlerts,
-  priceSeries,
-  regionDemand,
-  supplierRankings,
-  trendingProducts,
-} from "../platform/intelligence";
-import { countries } from "../platform/data/catalog";
+import { api } from "../platform/remote/endpoints";
+import { useApiQuery } from "../platform/remote/useApi";
 import { BarList, LineChart } from "../components/LineChart";
-import { Badge, Card, CardHeader, Progress, Rating, Select, Sparkline, Stat, cx } from "../ui";
+import { Badge, Card, CardHeader, Progress, Rating, Select, Stat, cx } from "../ui";
 
 export default function IntelligencePage() {
   const { d, t, n, money } = useI18n();
-  useDatabase();
 
-  const indices = categoryIndices();
-  const alerts = priceAlerts(3, 12);
-  const trending = trendingProducts(8);
-  const rankings = supplierRankings().slice(0, 8);
-  const regions = regionDemand();
+  const indicesQuery = useApiQuery((signal) => api.intelligence.categories(signal), []);
+  const alertsQuery = useApiQuery((signal) => api.intelligence.alerts(signal), []);
+  const trendingQuery = useApiQuery((signal) => api.intelligence.trending(signal), []);
+  const rankingsQuery = useApiQuery((signal) => api.intelligence.suppliers(signal), []);
+  const regionsQuery = useApiQuery((signal) => api.intelligence.regions(signal), []);
+  const productsQuery = useApiQuery((signal) => api.catalog.products({ sort: "popular", perPage: 40 }, signal), []);
 
-  const [focusId, setFocusId] = useState(trending[0]?.product.id ?? catalog.products()[0]?.id ?? "");
-  const focus = catalog.product(focusId);
-  const focusSeries = focusId ? priceSeries(focusId) : null;
+  const indices = indicesQuery.data?.categories ?? [];
+  const alerts = alertsQuery.data?.alerts ?? [];
+  const trending = trendingQuery.data?.trending ?? [];
+  const rankings = (rankingsQuery.data?.suppliers ?? []).slice(0, 8);
+  const regions = regionsQuery.data?.regions ?? [];
+  const products = productsQuery.data?.items ?? [];
+
+  const [selected, setSelected] = useState("");
+  const focusId = selected || products[0]?.id || "";
+  const focus = products.find((p) => p.id === focusId) ?? null;
+
+  const focusQuery = useApiQuery(
+    (signal) => api.intelligence.forecast(focusId, signal),
+    [focusId],
+    { enabled: Boolean(focusId) },
+  );
+  const focusSeries = focusQuery.data?.priceSummary ?? null;
+  const focusHistory = focusQuery.data?.forecast.history ?? [];
 
   const avgChange = indices.length
     ? Math.round((indices.reduce((s, i) => s + i.changeMonthPct, 0) / indices.length) * 10) / 10
@@ -57,28 +63,31 @@ export default function IntelligencePage() {
       {/* Focus chart */}
       <Card className="mb-6">
         <CardHeader
-          title={t(d.product.priceHistory)}
+          title={t(d.intelligence.demandIndex)}
           subtitle={focus ? t(focus.name) : ""}
           action={
-            <Select value={focusId} onChange={(e) => setFocusId(e.target.value)} className="h-9 w-48 text-xs">
-              {catalog.products().slice(0, 40).map((p) => (
+            <Select value={focusId} onChange={(e) => setSelected(e.target.value)} className="h-9 w-48 text-xs">
+              {products.map((p) => (
                 <option key={p.id} value={p.id}>{t(p.name)}</option>
               ))}
             </Select>
           }
         />
         <div className="p-5">
-          {focusSeries ? (
+          {focusSeries && focusHistory.length ? (
             <>
               <LineChart
                 series={[
                   {
                     label: t(d.product.priceHistory),
                     color: "var(--color-accent)",
-                    points: focusSeries.points.map((p) => ({ x: p.date, y: p.avgPrice })),
+                    points: focusHistory.map((h, i) => ({
+                      x: h.date,
+                      y: focusQuery.data!.forecast.history[i].volume,
+                    })),
                   },
                 ]}
-                formatValue={(v) => money(Math.round(v))}
+                formatValue={(v) => n(Math.round(v))}
               />
               <dl className="mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-4">
                 {[
@@ -95,7 +104,9 @@ export default function IntelligencePage() {
               </dl>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">{t(d.common.loading)}</p>
+            <p className="text-sm text-muted-foreground">
+              {focusQuery.loading ? t(d.common.loading) : t(d.search.noResults)}
+            </p>
           )}
         </div>
       </Card>
@@ -116,11 +127,11 @@ export default function IntelligencePage() {
               </thead>
               <tbody>
                 {indices.map((idx) => (
-                  <tr key={idx.category.id} className="border-b border-border/60 last:border-0">
+                  <tr key={idx.categoryId} className="border-b border-border/60 last:border-0">
                     <td className="py-3">
-                      <Link to={`/search?category=${idx.category.id}`} className="flex items-center gap-2 hover:text-accent">
-                        <span>{idx.category.icon}</span>
-                        <span className="text-xs font-extrabold text-foreground">{t(idx.category.name)}</span>
+                      <Link to={`/search?category=${idx.categoryId}`} className="flex items-center gap-2 hover:text-accent">
+                        <span>{idx.icon}</span>
+                        <span className="text-xs font-extrabold text-foreground">{t(idx.name)}</span>
                       </Link>
                     </td>
                     <td className="num py-3 font-bold text-foreground">{money(idx.avgPrice)}</td>
@@ -171,31 +182,23 @@ export default function IntelligencePage() {
         <Card>
           <CardHeader title={t(d.intelligence.priceAlerts)} />
           <ul className="divide-y divide-border p-5 pt-0">
-            {alerts.map((a) => {
-              const series = priceSeries(a.product.id);
-              return (
-                <li key={a.product.id} className="flex items-center gap-3 py-3 first:pt-5">
-                  <span className="text-xl">{a.product.image}</span>
-                  <div className="min-w-0 flex-1">
-                    <Link to={`/product/${a.product.id}`} className="block truncate text-xs font-bold text-foreground hover:text-accent">
-                      {t(a.product.name)}
-                    </Link>
-                    <span className="num text-[10px] text-muted-foreground">
-                      {money(a.previous)} → {money(a.current)}
-                    </span>
-                  </div>
-                  {series && (
-                    <div className="w-20 shrink-0">
-                      <Sparkline points={series.points.slice(-13).map((p) => p.avgPrice)} tone={a.direction === "up" ? "danger" : "success"} />
-                    </div>
-                  )}
-                  <Badge tone={a.direction === "up" ? "danger" : "success"}>
-                    {a.direction === "up" ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    <span className="num">{a.changePct >= 0 ? "+" : ""}{n(a.changePct)}%</span>
-                  </Badge>
-                </li>
-              );
-            })}
+            {alerts.map((a) => (
+              <li key={a.productId} className="flex items-center gap-3 py-3 first:pt-5">
+                <span className="text-xl">{a.image}</span>
+                <div className="min-w-0 flex-1">
+                  <Link to={`/product/${a.productId}`} className="block truncate text-xs font-bold text-foreground hover:text-accent">
+                    {t(a.name)}
+                  </Link>
+                  <span className="num text-[10px] text-muted-foreground">
+                    {money(a.previous)} → {money(a.current)}
+                  </span>
+                </div>
+                <Badge tone={a.direction === "up" ? "danger" : "success"}>
+                  {a.direction === "up" ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                  <span className="num">{a.changePct >= 0 ? "+" : ""}{n(a.changePct)}%</span>
+                </Badge>
+              </li>
+            ))}
           </ul>
         </Card>
 
@@ -205,10 +208,10 @@ export default function IntelligencePage() {
             <CardHeader title={t(d.intelligence.trendingProducts)} />
             <ul className="divide-y divide-border p-5 pt-0">
               {trending.map((tp) => (
-                <li key={tp.product.id} className="flex items-center gap-3 py-3 first:pt-5">
-                  <span className="text-xl">{tp.product.image}</span>
-                  <Link to={`/product/${tp.product.id}`} className="min-w-0 flex-1 truncate text-xs font-bold text-foreground hover:text-accent">
-                    {t(tp.product.name)}
+                <li key={tp.productId} className="flex items-center gap-3 py-3 first:pt-5">
+                  <span className="text-xl">{tp.image}</span>
+                  <Link to={`/product/${tp.productId}`} className="min-w-0 flex-1 truncate text-xs font-bold text-foreground hover:text-accent">
+                    {t(tp.name)}
                   </Link>
                   <span className="num text-xs font-extrabold text-success">▲ {n(tp.demandGrowthPct)}%</span>
                 </li>
@@ -221,7 +224,7 @@ export default function IntelligencePage() {
             <div className="p-5">
               <BarList
                 items={regions.map((r) => ({
-                  label: t(countries.find((c) => c.code === r.countryCode)?.name ?? { ar: r.countryCode, en: r.countryCode }),
+                  label: t(r.name),
                   value: r.value,
                   hint: `${n(r.orderCount)} ${t(d.nav.orders)} · ${t(d.intelligence.marketShare)} ${n(r.share)}%`,
                 }))}

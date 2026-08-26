@@ -13,7 +13,8 @@ const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((l) => l());
 
 async function load() {
-  if (!getSession()) {
+  // Favourites hang off a company, so an admin account has none to load.
+  if (!getSession()?.user.companyId) {
     cache = new Set();
     loaded = true;
     notify();
@@ -49,7 +50,7 @@ export function useFavorites() {
   const isFavorite = useCallback((productId: string) => cache.has(productId), []);
 
   const toggle = useCallback(async (productId: string) => {
-    if (!getSession()) return;
+    if (!getSession()?.user.companyId) return;
     const next = new Set(cache);
     const wasFavorite = next.has(productId);
     // Optimistic: the heart must respond instantly, and roll back on failure.

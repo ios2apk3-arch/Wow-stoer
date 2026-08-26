@@ -216,6 +216,119 @@ export interface RemoteMessage {
   at: string;
 }
 
+
+export interface BuyerAnalytics {
+  totalSpend: number;
+  orderCount: number;
+  avgOrderValue: number;
+  supplierCount: number;
+  openRfqs: number;
+  activeNegotiations: number;
+  favourites: number;
+  monthly: { month: string; value: number }[];
+  topCategories: { categoryId: string; name: I18nText; value: number; share: number }[];
+  topSuppliers: { supplierId: string; name: I18nText; logo: string; value: number; orderCount: number }[];
+}
+
+export interface ReorderSuggestion {
+  productId: string;
+  name: I18nText;
+  image: string;
+  avgIntervalDays: number;
+  daysSinceLast: number;
+  daysUntilReorder: number;
+  suggestedQty: number;
+  urgency: "overdue" | "soon" | "later";
+}
+
+export interface SupplierAnalytics {
+  revenue: number;
+  orderCount: number;
+  avgOrderValue: number;
+  buyerCount: number;
+  openRfqs: number;
+  activeNegotiations: number;
+  productCount: number;
+  rating: number;
+  onTimeRate: number;
+  monthly: { month: string; value: number }[];
+  topProducts: { productId: string; name: I18nText; image: string; value: number; qty: number }[];
+  lowStock: { id: string; name: I18nText; image: string; stock: number; availability: string }[];
+}
+
+export interface CategoryIndex {
+  categoryId: string;
+  name: I18nText;
+  icon: string;
+  avgPrice: number;
+  productCount: number;
+  supplierCount: number;
+  demandIndex: number;
+  changeMonthPct: number;
+}
+
+export interface PriceAlert {
+  productId: string;
+  name: I18nText;
+  image: string;
+  current: number;
+  previous: number;
+  changePct: number;
+  direction: "up" | "down";
+}
+
+export interface TrendingProduct {
+  productId: string;
+  name: I18nText;
+  image: string;
+  recentVolume: number;
+  demandGrowthPct: number;
+  priceChangePct: number;
+}
+
+export interface SupplierRanking {
+  supplierId: string;
+  name: I18nText;
+  logo: string;
+  rating: number;
+  onTimeRate: number;
+  responseHours: number;
+  fulfilledOrders: number;
+  productCount: number;
+  competitivenessPct: number;
+  score: number;
+}
+
+export interface RegionDemand {
+  countryCode: string;
+  name: I18nText;
+  orderCount: number;
+  value: number;
+  share: number;
+}
+
+export interface DemandForecast {
+  history: { date: string; volume: number }[];
+  projection: { date: string; volume: number; low: number; high: number }[];
+  trendPerWeek: number;
+  seasonalStrength: number;
+  nextMonthUnits: number;
+  confidence: number;
+  priceOutlookPct: number;
+  direction: "rising" | "flat" | "declining";
+}
+
+export interface PriceSummary {
+  current: number;
+  min: number;
+  max: number;
+  avg: number;
+  changeWeekPct: number;
+  changeMonthPct: number;
+  changeQuarterPct: number;
+  volatility: number;
+}
+
 export interface ProductQuery {
   q?: string;
   category?: string;
@@ -413,6 +526,29 @@ export const api = {
       request<Page<{ id: number; actorId: string | null; action: string; target: string; at: string }>>(
         "/api/v1/admin/audit",
         { query, signal },
+      ),
+  },
+
+  analytics: {
+    buyer: (signal?: AbortSignal) => request<BuyerAnalytics>("/api/v1/analytics/buyer", { signal }),
+    reorders: (signal?: AbortSignal) =>
+      request<{ suggestions: ReorderSuggestion[] }>("/api/v1/analytics/buyer/reorders", { signal }),
+    supplier: (signal?: AbortSignal) => request<SupplierAnalytics>("/api/v1/analytics/supplier", { signal }),
+  },
+
+  intelligence: {
+    categories: (signal?: AbortSignal) =>
+      request<{ categories: CategoryIndex[] }>("/api/v1/intelligence/categories", { signal }),
+    alerts: (signal?: AbortSignal) => request<{ alerts: PriceAlert[] }>("/api/v1/intelligence/alerts", { signal }),
+    trending: (signal?: AbortSignal) =>
+      request<{ trending: TrendingProduct[] }>("/api/v1/intelligence/trending", { signal }),
+    suppliers: (signal?: AbortSignal) =>
+      request<{ suppliers: SupplierRanking[] }>("/api/v1/intelligence/suppliers", { signal }),
+    regions: (signal?: AbortSignal) => request<{ regions: RegionDemand[] }>("/api/v1/intelligence/regions", { signal }),
+    forecast: (productId: string, signal?: AbortSignal) =>
+      request<{ productId: string; forecast: DemandForecast; priceSummary: PriceSummary | null }>(
+        `/api/v1/forecast/${productId}`,
+        { signal },
       ),
   },
 

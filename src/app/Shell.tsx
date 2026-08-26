@@ -137,7 +137,9 @@ export function Shell({ children }: { children: ReactNode }) {
     [user?.id],
     { enabled: Boolean(user) },
   );
-  const threadsQuery = useApiQuery((signal) => api.messaging.threads(signal), [user?.id], { enabled: Boolean(user) });
+  // Messaging is company-to-company; an admin belongs to no company.
+  const hasCompany = Boolean(user?.companyId);
+  const threadsQuery = useApiQuery((signal) => api.messaging.threads(signal), [user?.id], { enabled: hasCompany });
 
   const cartCount = cartQuery.data?.lines.length ?? 0;
   const notifCount = notifQuery.data?.unreadCount ?? 0;
@@ -188,10 +190,12 @@ export function Shell({ children }: { children: ReactNode }) {
 
             {user && (
               <>
+                {hasCompany && (
                 <Link to="/messages" className="relative rounded-xl p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t(d.nav.messages)}>
                   <MessageSquare className="h-5 w-5" />
                   {msgCount > 0 && <span className="num absolute end-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">{msgCount}</span>}
                 </Link>
+                )}
                 <Link to="/notifications" className="relative rounded-xl p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t(d.nav.notifications)}>
                   <Bell className="h-5 w-5" />
                   {notifCount > 0 && <span className="num absolute end-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">{notifCount}</span>}
